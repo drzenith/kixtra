@@ -10,6 +10,7 @@ import com.drzenith.kixtra.data.Store
 import com.drzenith.kixtra.data.Video
 import com.drzenith.kixtra.player.Playable
 import com.drzenith.kixtra.player.PlayerController
+import com.drzenith.kixtra.player.PlayerSheet
 
 /**
  * Navigation + playback actions shared by all screens.
@@ -20,6 +21,9 @@ import com.drzenith.kixtra.player.PlayerController
 class Actions(val nav: Navigator, val player: PlayerController, val store: Store) {
     /** True = full player on top; false = mini player (if something is loaded). */
     var playerExpanded by mutableStateOf(false)
+
+    /** Drag/animation state for minimizing the expanded player. */
+    val sheet = PlayerSheet().also { it.onCollapsed = { playerExpanded = false } }
 
     fun openChannel(slug: String) {
         playerExpanded = false
@@ -73,8 +77,9 @@ class Actions(val nav: Navigator, val player: PlayerController, val store: Store
         playerExpanded = true
     }
 
+    /** Animated: the player glides down into the mini player. */
     fun minimizePlayer() {
-        playerExpanded = false
+        if (playerExpanded) sheet.collapse()
     }
 
     fun expandPlayer() {

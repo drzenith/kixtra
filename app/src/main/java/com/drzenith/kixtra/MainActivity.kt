@@ -11,7 +11,21 @@ import android.util.Rational
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
@@ -39,6 +53,7 @@ import com.drzenith.kixtra.player.PlaybackService
 import com.drzenith.kixtra.player.MiniPlayer
 import com.drzenith.kixtra.player.PipVideo
 import com.drzenith.kixtra.player.PlayerScreen
+import com.drzenith.kixtra.player.detectSheetDrag
 import com.drzenith.kixtra.player.isWideWindow
 import com.drzenith.kixtra.ui.Actions
 import com.drzenith.kixtra.ui.CategoryScreen
@@ -91,6 +106,8 @@ class MainActivity : ComponentActivity() {
         val error by pc.error.collectAsState()
         val hasPlayer = current != null || loading || error != null
         val expanded = actions.playerExpanded && hasPlayer
+        val sheetScope = rememberCoroutineScope()
+        SideEffect { actions.sheet.scope = sheetScope }
 
         BackHandler(enabled = true) {
             when {
@@ -116,21 +133,53 @@ class MainActivity : ComponentActivity() {
                     is Screen.CategoryPage -> CategoryScreen(top, actions)
                     is Screen.Settings -> SettingsScreen(actions)
                 }
-                if (expanded) {
-                    // Full player above the screens; swallow touches so nothing underneath reacts.
+                // Mini player: fades/scales in at the bottom-right when the full player collapses.
+                AnimatedVisibility(
+                    visible = hasPlayer && !expanded,
+                    modifier = Modifier.align(Alignment.BottomEnd)
+                        .padding(end = 12.dp, bottom = if (top is Screen.Home) 92.dp else 16.dp),
+                    enter = fadeIn(tween(180)) + scaleIn(tween(220), initialScale = 0.7f, transformOrigin = TransformOrigin(1f, 1f)),
+                    exit = fadeOut(tween(120)),
+                ) {
+                    MiniPlayer(actions)
+                }
+                // Full player: slides up when opened; follows your finger when dragged down and
+                // shrinks toward the bottom-right corner (see PlayerSheet).
+                AnimatedVisibility(
+                    visible = expanded,
+                    enter = slideInVertically(tween(260)) { it } + fadeIn(tween(200)),
+                    exit = ExitTransition.None,
+                ) {
+                    val sheet = actions.sheet
                     Box(
                         Modifier.fillMaxSize()
-                            .background(MaterialTheme.colorScheme.background)
-                            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}
+                            .onGloballyPositioned {
+                                sheet.parentCoords = it
+                                sheet.heightPx = it.size.height.toFloat().coerceAtLeast(1f)
+                            }
+                            .pointerInput(sheet) { detectSheetDrag(sheet) }
                     ) {
-                        PlayerScreen(actions)
+                        Box(
+                            Modifier.fillMaxSize()
+                                .graphicsLayer {
+                                    val f = sheet.fraction
+                                    val k = 0.6f
+                                    transformOrigin = TransformOrigin(1f, 1f)
+                                    scaleX = 1f - k * f
+                                    scaleY = 1f - k * f
+                                    // Top edge tracks the finger exactly: H*k*f + t == offset.
+                                    translationY = sheet.offset.value * (1f - k)
+                                    alpha = 1f - 0.5f * f
+                                    shape = RoundedCornerShape((24 * f).dp)
+                                    clip = f > 0f
+                                }
+                                .background(MaterialTheme.colorScheme.background)
+                                // Swallow taps so nothing underneath reacts.
+                                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}
+                        ) {
+                            PlayerScreen(actions)
+                        }
                     }
-                } else if (hasPlayer) {
-                    MiniPlayer(
-                        actions,
-                        Modifier.align(Alignment.BottomEnd)
-                            .padding(end = 12.dp, bottom = if (top is Screen.Home) 92.dp else 16.dp),
-                    )
                 }
             }
         }

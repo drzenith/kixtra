@@ -156,6 +156,10 @@ private fun splitFollows(state: Screen.Home, follows: List<FollowedChannel>): Pa
     return live to offline
 }
 
+/** Prefer the Live tab's thumbnail for a channel (those load reliably), else the channel's own. */
+private fun thumbFor(state: Screen.Home, slug: String, fallback: String?): String? =
+    state.streams.items.firstOrNull { it.slug.equals(slug, true) }?.thumbnail ?: fallback
+
 /** Full-width grid item (headers, footers, messages). */
 fun LazyGridScope.full(key: String? = null, content: @Composable () -> Unit) =
     item(key = key, span = { GridItemSpan(maxLineSpan) }) { content() }
@@ -174,7 +178,7 @@ private fun FollowingTab(state: Screen.Home, follows: List<FollowedChannel>, act
         items(live, key = { "live_" + it.slug }) { ch ->
             val l = ch.live!!
             StreamCard(
-                item = StreamItem(ch.slug, ch.username, l.title, l.viewers, l.category, l.thumbnail, ch.avatar),
+                item = StreamItem(ch.slug, ch.username, l.title, l.viewers, l.category, thumbFor(state, ch.slug, l.thumbnail), ch.avatar),
                 onClick = { actions.playLive(ch) },
                 onChannel = { actions.openChannel(ch.slug) },
             )
@@ -216,7 +220,7 @@ private fun LiveTab(state: Screen.Home, actions: Actions, scope: CoroutineScope)
                         val l = ch.live!!
                         Column(Modifier.width(280.dp)) {
                             StreamCard(
-                                item = StreamItem(ch.slug, ch.username, l.title, l.viewers, l.category, l.thumbnail, ch.avatar),
+                                item = StreamItem(ch.slug, ch.username, l.title, l.viewers, l.category, thumbFor(state, ch.slug, l.thumbnail), ch.avatar),
                                 onClick = { actions.playLive(ch) },
                                 onChannel = { actions.openChannel(ch.slug) },
                             )

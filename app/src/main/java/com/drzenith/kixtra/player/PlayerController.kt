@@ -17,6 +17,8 @@ import androidx.media3.common.Tracks
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.SeekParameters
+import android.view.TextureView
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import com.drzenith.kixtra.data.Channel
 import com.drzenith.kixtra.data.Clip
@@ -57,7 +59,7 @@ data class Quality(val label: String, val height: Int, val fps: Int, val group: 
  * Owns the single ExoPlayer instance. The UI, PiP and the background MediaSession all share it,
  * so playback carries on when the app is in the background.
  */
-class PlayerController(context: Context, private val store: Store) {
+class PlayerController(private val context: Context, private val store: Store) {
     private val tag = "PlayerController"
     private val scope = MainScope()
 
@@ -271,6 +273,8 @@ class PlayerController(context: Context, private val store: Store) {
                     }
                 }
                 lastRefreshAt = System.currentTimeMillis()
+                currentUrl = url
+                currentIsHls = p !is Playable.ClipItem || url.contains(".m3u8")
                 val meta = MediaMetadata.Builder()
                     .setTitle(metaTitle)
                     .setArtist(p.channel.username)
@@ -449,7 +453,61 @@ class PlayerController(context: Context, private val store: Store) {
         }
     }
 
+    // ---------- Scrub preview ----------
+    // A second, muted, lowest-quality player on the same playlist. While the user drags the seek
+    // bar it jumps to the nearest keyframe and renders that frame into a small preview window.
+
+    private var currentUrl: String? = null
+    private var currentIsHls = true
+    private var preview: ExoPlayer? = null
+    private var previewUrl: String? = null
+
+    private fun previewPlayer(): ExoPlayer = preview ?: ExoPlayer.Builder(
+        context,
+        DefaultRenderersFactory(context)
+            .setEnableDecoderFallback(true)
+            .setMediaCodecSelector(codecSelector),
+    ).build().also { pp ->
+        pp.volume = 0f
+        pp.setSeekParameters(SeekParameters.CLOSEST_SYNC)
+        pp.trackSelectionParameters = pp.trackSelectionParameters.buildUpon()
+            .setForceLowestBitrate(true)
+            .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
+            .build()
+        preview = pp
+    }
+
+    fun previewSeek(positionMs: Long) {
+        val url = currentUrl ?: return
+        val pp = previewPlayer()
+        if (previewUrl != url) {
+            val item = MediaItem.Builder().setUri(url)
+                .apply { if (currentIsHls) setMimeType(MimeTypes.APPLICATION_M3U8) }
+                .build()
+            pp.setMediaItem(item, positionMs)
+            pp.prepare()
+            previewUrl = url
+        } else {
+            pp.seekTo(positionMs)
+        }
+        pp.playWhenReady = false
+    }
+
+    fun attachPreview(view: TextureView) = previewPlayer().setVideoTextureView(view)
+
+    fun detachPreview(view: TextureView) {
+        preview?.clearVideoTextureView(view)
+    }
+
+    private fun releasePreview() {
+        preview?.release()
+        preview = null
+        previewUrl = null
+    }
+
     fun stop() {
+        releasePreview()
+        currentUrl = null
         saveProgress()
         resolveJob?.cancel()
         loadJob?.cancel()

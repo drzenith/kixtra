@@ -7,62 +7,54 @@ import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.graphics.Typeface
 import android.os.Build
+import android.util.TypedValue
+import android.view.Gravity
+import android.view.TextureView
 import android.view.View
+import android.view.ViewGroup
+import android.widget.LinearLayout
+import android.widget.PopupMenu
+import android.widget.TextView
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.positionChange
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.IntOffset
-import kotlin.math.abs
-import kotlin.math.roundToInt
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -70,12 +62,19 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -83,23 +82,28 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.media3.common.C
 import androidx.media3.common.Player
 import androidx.media3.ui.DefaultTimeBar
 import androidx.media3.ui.PlayerView
+import androidx.media3.ui.TimeBar
 import com.drzenith.kixtra.chat.ChatSource
 import com.drzenith.kixtra.chat.ChatView
 import com.drzenith.kixtra.chat.LiveChat
 import com.drzenith.kixtra.chat.ReplayChat
 import com.drzenith.kixtra.chat.parseKickTime
+import com.drzenith.kixtra.ui.AccentCyan
+import com.drzenith.kixtra.ui.AccentViolet
 import com.drzenith.kixtra.ui.Actions
 import com.drzenith.kixtra.ui.Avatar
 import com.drzenith.kixtra.ui.Badge
-import com.drzenith.kixtra.ui.AccentCyan
-import com.drzenith.kixtra.ui.AccentViolet
 import com.drzenith.kixtra.ui.LiveRed
 import com.drzenith.kixtra.ui.compact
+import com.drzenith.kixtra.ui.hms
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /** Wide, tall-enough windows (tablets, desktop/Waydroid) get the side-by-side player layout. */
 fun isWideWindow(cfg: Configuration): Boolean = cfg.screenWidthDp >= 840 && cfg.screenHeightDp >= 480
@@ -114,12 +118,39 @@ tailrec fun Context.findActivity(): Activity? = when (this) {
     else -> null
 }
 
+/** Quality / speed / refresh buttons that live in Media3's own control bar, next to fullscreen. */
+class BarSpec(
+    val quality: String,
+    val speed: String?,
+    val onQuality: (View) -> Unit,
+    val onSpeed: (View) -> Unit,
+    val onRefresh: () -> Unit,
+)
+
+private class BarButtons(val quality: TextView, val speed: TextView, val refresh: TextView)
+
+/** Native popup menu anchored to a control-bar button. */
+private fun showMenu(anchor: View, options: List<Pair<String, () -> Unit>>, selected: String) {
+    val menu = PopupMenu(anchor.context, anchor)
+    options.forEachIndexed { i, (label, _) ->
+        menu.menu.add(0, i, i, if (label == selected) "✓  $label" else label)
+    }
+    menu.setOnMenuItemClickListener { item ->
+        options.getOrNull(item.itemId)?.second?.invoke()
+        true
+    }
+    menu.show()
+}
+
 @Composable
 fun PlayerScreen(actions: Actions) {
     val pc = actions.player
     val current by pc.current.collectAsState()
     val loading by pc.loading.collectAsState()
     val error by pc.error.collectAsState()
+    val qualities by pc.qualities.collectAsState()
+    val selectedQ by pc.selectedQuality.collectAsState()
+    val speed by pc.speed.collectAsState()
     val context = LocalContext.current
     val activity = context.findActivity()
     val cfg = LocalConfiguration.current
@@ -130,7 +161,7 @@ fun PlayerScreen(actions: Actions) {
     var chatInLandscape by remember { mutableStateOf(false) }
     var controlsVisible by remember { mutableStateOf(true) }
     var forceFullscreen by remember { mutableStateOf(false) }
-    val menuOpen = remember { mutableStateOf(false) }
+    var scrubPos by remember { mutableStateOf<Long?>(null) }
     val fullscreen = (landscape && !wide) || forceFullscreen
     val notice by pc.notice.collectAsState()
     LaunchedEffect(notice) {
@@ -140,6 +171,8 @@ fun PlayerScreen(actions: Actions) {
         }
     }
     BackHandler(enabled = forceFullscreen) { forceFullscreen = false }
+    // Drag-to-minimize only outside fullscreen.
+    SideEffect { actions.sheet.enabled = !fullscreen }
 
     // Ask once for notification permission so background playback shows its controls.
     val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
@@ -152,7 +185,7 @@ fun PlayerScreen(actions: Actions) {
         }
     }
 
-    // Immersive in landscape; restore orientation + bars when leaving the player.
+    // Immersive in fullscreen; restore orientation + bars when leaving the player.
     DisposableEffect(fullscreen) {
         val window = activity?.window
         if (window != null) {
@@ -209,9 +242,33 @@ fun PlayerScreen(actions: Actions) {
         onDispose { chat?.stop() }
     }
 
+    // Control-bar buttons.
+    val seekable = current?.seekable == true
+    val qOptions = buildList<Pair<String, () -> Unit>> {
+        add("Auto" to { pc.selectAuto() })
+        qualities.forEach { q -> add(q.label to { pc.selectQuality(q) }) }
+        add("Audio only" to { pc.selectAudioOnly() })
+    }
+    val bar = BarSpec(
+        quality = if (selectedQ == "Audio only") "Audio" else selectedQ,
+        speed = if (seekable) speedLabel(speed) else null,
+        onQuality = { v -> showMenu(v, qOptions, selectedQ) },
+        onSpeed = { v -> showMenu(v, SPEEDS.map { s -> speedLabel(s) to { pc.setSpeed(s) } }, speedLabel(speed)) },
+        onRefresh = { pc.reload(keepPosition = true) },
+    )
+    val onScrub: (Long?) -> Unit = { pos ->
+        if (seekable) {
+            scrubPos = pos
+            if (pos != null) pc.previewSeek(pos)
+        }
+    }
+
     val video: @Composable (Modifier) -> Unit = { m ->
-        Box(m.background(Color.Black).then(if (fullscreen) Modifier else Modifier.swipeDown { actions.minimizePlayer() })) {
-            VideoBox(pc.player, Modifier.fillMaxSize(), true, fullscreen, ::setFullscreen) { controlsVisible = it }
+        Box(m.background(Color.Black)) {
+            VideoBox(
+                pc.player, Modifier.fillMaxSize(), useController = true, fullscreen = fullscreen,
+                onFullscreen = ::setFullscreen, onControls = { controlsVisible = it }, bar = bar, onScrub = onScrub,
+            )
             when {
                 loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
                 error != null -> Column(Modifier.align(Alignment.Center).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -229,17 +286,11 @@ fun PlayerScreen(actions: Actions) {
                         .background(Color(0xCC000000)).padding(horizontal = 10.dp, vertical = 6.dp),
                 )
             }
-            // Player overlay controls: shown with the player's own controls (or while a menu is open).
-            if (controlsVisible || menuOpen.value) {
+            scrubPos?.let { pos -> ScrubPreview(pc, pos, pc.player.duration) }
+            if (controlsVisible) {
                 Box(Modifier.align(Alignment.TopStart).padding(8.dp)) { ContextAction(actions) }
-                Row(
-                    Modifier.align(Alignment.TopEnd).padding(8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    QualitySpeedButtons(actions) { menuOpen.value = it }
-                    Pill("↻") { pc.reload(keepPosition = true) }
-                    if (fullscreen && chat != null) {
+                if (fullscreen && chat != null) {
+                    Box(Modifier.align(Alignment.TopEnd).padding(8.dp)) {
                         Pill(if (chatInLandscape) "Hide chat" else "Chat") { chatInLandscape = !chatInLandscape }
                     }
                 }
@@ -249,6 +300,7 @@ fun PlayerScreen(actions: Actions) {
 
     val chatMessages = chat?.messages?.collectAsState()
     val chatStatus = chat?.status?.collectAsState()
+    val zone = Modifier.onGloballyPositioned { actions.sheet.zoneCoords = it }
 
     if (fullscreen) {
         Row(Modifier.fillMaxSize().background(Color.Black)) {
@@ -259,7 +311,7 @@ fun PlayerScreen(actions: Actions) {
         }
     } else if (wide) {
         Row(Modifier.fillMaxSize()) {
-            Column(Modifier.weight(1f).fillMaxHeight()) {
+            Column(Modifier.weight(1f).fillMaxHeight().then(zone)) {
                 video(Modifier.fillMaxWidth().weight(1f))
                 InfoBar(actions)
             }
@@ -269,13 +321,64 @@ fun PlayerScreen(actions: Actions) {
         }
     } else {
         Column(Modifier.fillMaxSize()) {
-            video(Modifier.fillMaxWidth().aspectRatio(16f / 9f))
-            InfoBar(actions)
+            Column(Modifier.fillMaxWidth().then(zone)) {
+                video(Modifier.fillMaxWidth().aspectRatio(16f / 9f))
+                InfoBar(actions)
+            }
             if (chat != null) {
                 ChatView(chatMessages?.value ?: emptyList(), chatStatus?.value ?: "", Modifier.fillMaxWidth().weight(1f))
             }
         }
     }
+}
+
+/** Small frame preview + timestamp that follows the scrub position along the seek bar. */
+@Composable
+private fun ScrubPreview(pc: PlayerController, posMs: Long, durationMs: Long) {
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val frac = if (durationMs > 0) (posMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
+        val w = 160.dp
+        val h = 90.dp
+        val x = (maxWidth - w) * frac
+        val y = (maxHeight - h - 78.dp).coerceAtLeast(4.dp)
+        Column(
+            Modifier.offset(x = x, y = y).width(w),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            AndroidView(
+                factory = { ctx -> TextureView(ctx).also { pc.attachPreview(it) } },
+                modifier = Modifier.size(w, h).clip(RoundedCornerShape(6.dp)).background(Color.Black),
+                onRelease = { pc.detachPreview(it) },
+            )
+            Text(
+                hms(posMs),
+                color = Color.White,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(top = 2.dp).background(Color(0x99000000), RoundedCornerShape(4.dp))
+                    .padding(horizontal = 6.dp, vertical = 1.dp),
+            )
+        }
+    }
+}
+
+private fun barButton(ctx: Context, text: String, sizeSp: Float = 13f): TextView = TextView(ctx).apply {
+    val density = resources.displayMetrics.density
+    this.text = text
+    setTextColor(android.graphics.Color.WHITE)
+    textSize = sizeSp
+    typeface = Typeface.DEFAULT_BOLD
+    gravity = Gravity.CENTER
+    val pad = (8 * density).toInt()
+    setPadding(pad, 0, pad, 0)
+    minWidth = (40 * density).toInt()
+    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, (48 * density).toInt())
+    val tv = TypedValue()
+    if (ctx.theme.resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, tv, true)) {
+        setBackgroundResource(tv.resourceId)
+    }
+    isClickable = true
+    isFocusable = true
 }
 
 @Composable
@@ -286,9 +389,14 @@ internal fun VideoBox(
     fullscreen: Boolean,
     onFullscreen: (Boolean) -> Unit,
     onControls: (Boolean) -> Unit,
+    bar: BarSpec? = null,
+    onScrub: ((Long?) -> Unit)? = null,
 ) {
     val fs by rememberUpdatedState(onFullscreen)
     val ctl by rememberUpdatedState(onControls)
+    val barRef = rememberUpdatedState(bar)
+    val scrubRef = rememberUpdatedState(onScrub)
+    val withBar = bar != null
     AndroidView(
         modifier = modifier,
         factory = { ctx ->
@@ -302,11 +410,39 @@ internal fun VideoBox(
                 setFullscreenButtonClickListener { isFull -> fs(isFull) }
                 // Media3's settings cog duplicates our speed/quality menus (and caps speed at 2x).
                 findViewById<View>(androidx.media3.ui.R.id.exo_settings)?.visibility = View.GONE
-                // Brand-colored seek bar.
+                // Brand-colored seek bar + scrub preview hooks.
                 findViewById<DefaultTimeBar>(androidx.media3.ui.R.id.exo_progress)?.apply {
                     setPlayedColor(AccentViolet.toArgb())
                     setScrubberColor(AccentCyan.toArgb())
                     setBufferedColor(0x66FFFFFF)
+                    addListener(object : TimeBar.OnScrubListener {
+                        override fun onScrubStart(timeBar: TimeBar, position: Long) {
+                            scrubRef.value?.invoke(position)
+                        }
+
+                        override fun onScrubMove(timeBar: TimeBar, position: Long) {
+                            scrubRef.value?.invoke(position)
+                        }
+
+                        override fun onScrubStop(timeBar: TimeBar, position: Long, canceled: Boolean) {
+                            scrubRef.value?.invoke(null)
+                        }
+                    })
+                }
+                // Quality / speed / refresh in the bottom bar, to the left of fullscreen.
+                if (withBar) {
+                    findViewById<ViewGroup>(androidx.media3.ui.R.id.exo_basic_controls)?.let { basic ->
+                        val q = barButton(ctx, "Auto")
+                        val s = barButton(ctx, "1x")
+                        val r = barButton(ctx, "↻", sizeSp = 18f)
+                        q.setOnClickListener { v -> barRef.value?.onQuality?.invoke(v) }
+                        s.setOnClickListener { v -> barRef.value?.onSpeed?.invoke(v) }
+                        r.setOnClickListener { barRef.value?.onRefresh?.invoke() }
+                        basic.addView(r, 0)
+                        basic.addView(s, 0)
+                        basic.addView(q, 0)
+                        tag = BarButtons(q, s, r)
+                    }
                 }
                 setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { v -> ctl(v == View.VISIBLE) })
             }
@@ -314,6 +450,17 @@ internal fun VideoBox(
         update = { v ->
             v.useController = useController
             v.setFullscreenButtonState(fullscreen)
+            val b = v.tag as? BarButtons
+            val spec = bar
+            if (b != null && spec != null) {
+                b.quality.text = spec.quality
+                if (spec.speed != null) {
+                    b.speed.text = spec.speed
+                    b.speed.visibility = View.VISIBLE
+                } else {
+                    b.speed.visibility = View.GONE
+                }
+            }
         },
         onRelease = { it.player = null },
     )
@@ -330,7 +477,7 @@ private fun InfoBar(actions: Actions) {
         is Playable.Vod -> p.video.title
         is Playable.ClipItem -> p.clip.title
     }
-    Column(Modifier.fillMaxWidth().swipeDown { actions.minimizePlayer() }.padding(start = 2.dp, end = 10.dp, top = 4.dp, bottom = 8.dp)) {
+    Column(Modifier.fillMaxWidth().padding(start = 2.dp, end = 10.dp, top = 4.dp, bottom = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { actions.minimizePlayer() }) {
                 Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Minimize player")
@@ -352,27 +499,6 @@ private fun InfoBar(actions: Actions) {
                 }
             }
         }
-    }
-}
-
-/** Compact quality + speed menus for the player overlay. */
-@Composable
-private fun QualitySpeedButtons(actions: Actions, onMenuOpen: (Boolean) -> Unit) {
-    val pc = actions.player
-    val current by pc.current.collectAsState()
-    val qualities by pc.qualities.collectAsState()
-    val selectedQ by pc.selectedQuality.collectAsState()
-    val speed by pc.speed.collectAsState()
-    val p = current ?: return
-
-    val qOptions = buildList<Pair<String, () -> Unit>> {
-        add("Auto" to { pc.selectAuto() })
-        qualities.forEach { q -> add(q.label to { pc.selectQuality(q) }) }
-        add("Audio only" to { pc.selectAudioOnly() })
-    }
-    MenuButton(selectedQ, qOptions, selectedQ, onMenuOpen)
-    if (p.seekable) {
-        MenuButton(speedLabel(speed), SPEEDS.map { s -> speedLabel(s) to { pc.setSpeed(s) } }, speedLabel(speed), onMenuOpen)
     }
 }
 
@@ -403,55 +529,6 @@ private fun Pill(label: String, onClick: () -> Unit) {
             .clickable(onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 5.dp),
     )
-}
-
-@Composable
-private fun MenuButton(
-    label: String,
-    options: List<Pair<String, () -> Unit>>,
-    selected: String?,
-    onOpenChange: (Boolean) -> Unit,
-) {
-    var open by remember { mutableStateOf(false) }
-    fun setOpen(v: Boolean) {
-        open = v
-        onOpenChange(v)
-    }
-    Box {
-        Pill("$label ▾") { setOpen(true) }
-        DropdownMenu(expanded = open, onDismissRequest = { setOpen(false) }) {
-            options.forEach { (text, action) ->
-                DropdownMenuItem(
-                    text = { Text(if (text == selected) "✓  $text" else "    $text") },
-                    onClick = { setOpen(false); action() },
-                )
-            }
-        }
-    }
-}
-
-
-/** Fires [onSwipe] on a clear downward swipe; other touches still reach the player. */
-fun Modifier.swipeDown(onSwipe: () -> Unit): Modifier = pointerInput(Unit) {
-    val threshold = 72.dp.toPx()
-    awaitEachGesture {
-        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-        var dx = 0f
-        var dy = 0f
-        while (true) {
-            val event = awaitPointerEvent(PointerEventPass.Initial)
-            val change = event.changes.firstOrNull { it.id == down.id } ?: break
-            if (!change.pressed) break
-            val delta = change.positionChange()
-            dx += delta.x
-            dy += delta.y
-            if (dy > threshold && dy > 2 * abs(dx)) {
-                change.consume()
-                onSwipe()
-                break
-            }
-        }
-    }
 }
 
 /** Video only, for picture-in-picture. */
