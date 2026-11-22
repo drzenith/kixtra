@@ -36,17 +36,17 @@ class Actions(val nav: Navigator, val player: PlayerController, val store: Store
 
     fun openLive(slug: String) {
         player.playLive(slug)
-        playerExpanded = true
+        showPlayer()
     }
 
     fun playLive(channel: Channel) {
         player.play(Playable.Live(channel))
-        playerExpanded = true
+        showPlayer()
     }
 
     fun playVod(channel: Channel, video: Video) {
         player.play(Playable.Vod(channel, video))
-        playerExpanded = true
+        showPlayer()
     }
 
     fun playClip(clip: Clip) {
@@ -62,18 +62,23 @@ class Actions(val nav: Navigator, val player: PlayerController, val store: Store
             live = null,
         )
         player.play(Playable.ClipItem(channel, clip))
-        playerExpanded = true
+        showPlayer()
     }
 
     /** Jump from a clip to the moment it came from in the full VOD. */
     fun continueClipInVod(clip: Clip) {
         player.playClipSource(clip)
-        playerExpanded = true
+        showPlayer()
     }
 
     /** Start the growing VOD of the current live stream from the beginning. */
     fun watchFromStart(channel: Channel) {
         player.play(Playable.Vod(channel, dvrVideo(channel) ?: return, dvr = true))
+        showPlayer()
+    }
+
+    private fun showPlayer() {
+        sheet.reset()
         playerExpanded = true
     }
 
@@ -82,8 +87,9 @@ class Actions(val nav: Navigator, val player: PlayerController, val store: Store
         if (playerExpanded) sheet.collapse()
     }
 
+    /** From the mini player: grows back out of the mini player's spot. */
     fun expandPlayer() {
-        playerExpanded = true
+        sheet.expandFromMini { playerExpanded = true }
     }
 
     /** Stop playback and remove the player entirely. */

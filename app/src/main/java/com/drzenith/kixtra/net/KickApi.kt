@@ -29,19 +29,8 @@ object KickApi {
     suspend fun channel(slug: String): Channel {
         val o = Http.getJson("https://kick.com/api/v2/channels/${enc(slug.lowercase())}").obj()
             ?: throw ApiException(0, "Bad channel response")
-        val ch = parseChannel(o, slug)
-        val live = ch.live ?: return ch
-        // The channel endpoint's thumbnail often isn't a usable image; the web livestream endpoint
-        // (same family as the Live tab, whose previews work) has the current one.
-        val thumb = liveThumbnail(ch.slug) ?: return ch
-        return ch.copy(live = live.copy(thumbnail = thumb))
+        return parseChannel(o, slug)
     }
-
-    private suspend fun liveThumbnail(slug: String): String? = runCatching {
-        val d = Http.getJson("https://web.kick.com/api/v1/channels/${enc(slug.lowercase())}/livestream").obj()
-        val ls = d.o("data").o("livestream") ?: d.o("data")
-        imageUrl(ls?.get("thumbnail"))
-    }.getOrNull()
 
     private fun parseChannel(o: JsonObject, fallbackSlug: String): Channel {
         val user = o.o("user")

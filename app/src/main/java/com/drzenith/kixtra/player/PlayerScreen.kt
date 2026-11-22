@@ -108,6 +108,9 @@ import kotlin.math.roundToInt
 /** Wide, tall-enough windows (tablets, desktop/Waydroid) get the side-by-side player layout. */
 fun isWideWindow(cfg: Configuration): Boolean = cfg.screenWidthDp >= 840 && cfg.screenHeightDp >= 480
 
+/** Width of the floating mini player (16:9). */
+val MINI_WIDTH = 200.dp
+
 private val SPEEDS = listOf(0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f, 2.5f, 3f, 3.5f, 4f)
 
 fun speedLabel(s: Float): String = if (s % 1f == 0f) "${s.toInt()}x" else "${s}x"
@@ -259,12 +262,16 @@ fun PlayerScreen(actions: Actions) {
     val onScrub: (Long?) -> Unit = { pos ->
         if (seekable) {
             scrubPos = pos
-            if (pos != null) pc.previewSeek(pos)
+            if (pos != null) pc.previewScrub(pos)
         }
     }
 
+    val sheet = actions.sheet
+    // Everything except the video fades while the player is dragged/animated into the mini player.
+    val fadeWithSheet = Modifier.graphicsLayer { alpha = 1f - sheet.fraction }
+
     val video: @Composable (Modifier) -> Unit = { m ->
-        Box(m.background(Color.Black)) {
+        Box(m.background(Color.Black).onGloballyPositioned { sheet.videoCoords = it }) {
             VideoBox(
                 pc.player, Modifier.fillMaxSize(), useController = true, fullscreen = fullscreen,
                 onFullscreen = ::setFullscreen, onControls = { controlsVisible = it }, bar = bar, onScrub = onScrub,
@@ -313,20 +320,20 @@ fun PlayerScreen(actions: Actions) {
         Row(Modifier.fillMaxSize()) {
             Column(Modifier.weight(1f).fillMaxHeight().then(zone)) {
                 video(Modifier.fillMaxWidth().weight(1f))
-                InfoBar(actions)
+                Box(fadeWithSheet) { InfoBar(actions) }
             }
             if (chat != null) {
-                ChatView(chatMessages?.value ?: emptyList(), chatStatus?.value ?: "", Modifier.width(340.dp).fillMaxHeight())
+                ChatView(chatMessages?.value ?: emptyList(), chatStatus?.value ?: "", Modifier.width(340.dp).fillMaxHeight().then(fadeWithSheet))
             }
         }
     } else {
         Column(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxWidth().then(zone)) {
                 video(Modifier.fillMaxWidth().aspectRatio(16f / 9f))
-                InfoBar(actions)
+                Box(fadeWithSheet) { InfoBar(actions) }
             }
             if (chat != null) {
-                ChatView(chatMessages?.value ?: emptyList(), chatStatus?.value ?: "", Modifier.fillMaxWidth().weight(1f))
+                ChatView(chatMessages?.value ?: emptyList(), chatStatus?.value ?: "", Modifier.fillMaxWidth().weight(1f).then(fadeWithSheet))
             }
         }
     }
@@ -547,13 +554,13 @@ fun MiniPlayer(actions: Actions, modifier: Modifier = Modifier) {
     val error by pc.error.collectAsState()
     val playing by pc.isPlaying.collectAsState()
     var dragX by remember { mutableFloatStateOf(0f) }
-    val widthPx = with(LocalDensity.current) { 200.dp.toPx() }
+    val widthPx = with(LocalDensity.current) { MINI_WIDTH.toPx() }
 
     Box(
         modifier
             .offset { IntOffset(dragX.roundToInt(), 0) }
             .graphicsLayer { alpha = 1f - (abs(dragX) / widthPx).coerceIn(0f, 0.8f) }
-            .width(200.dp)
+            .width(MINI_WIDTH)
             .aspectRatio(16f / 9f)
             .shadow(10.dp, RoundedCornerShape(10.dp))
             .clip(RoundedCornerShape(10.dp))

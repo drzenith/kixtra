@@ -26,6 +26,10 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.animation.EnterTransition
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.platform.LocalDensity
+import com.drzenith.kixtra.player.MINI_WIDTH
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
@@ -133,21 +137,32 @@ class MainActivity : ComponentActivity() {
                     is Screen.CategoryPage -> CategoryScreen(top, actions)
                     is Screen.Settings -> SettingsScreen(actions)
                 }
-                // Mini player: fades/scales in at the bottom-right when the full player collapses.
+                // Mini player. The collapsing player ends exactly on this spot, so it just appears.
+                val miniBottom = if (top is Screen.Home) 92.dp else 16.dp
+                val density = LocalDensity.current
+                SideEffect {
+                    with(density) {
+                        actions.sheet.miniWidthPx = MINI_WIDTH.toPx()
+                        actions.sheet.miniHeightPx = (MINI_WIDTH * 9f / 16f).toPx()
+                        actions.sheet.miniEndPx = 12.dp.toPx()
+                        actions.sheet.miniBottomPx = miniBottom.toPx()
+                    }
+                }
                 AnimatedVisibility(
                     visible = hasPlayer && !expanded,
-                    modifier = Modifier.align(Alignment.BottomEnd)
-                        .padding(end = 12.dp, bottom = if (top is Screen.Home) 92.dp else 16.dp),
-                    enter = fadeIn(tween(180)) + scaleIn(tween(220), initialScale = 0.7f, transformOrigin = TransformOrigin(1f, 1f)),
-                    exit = fadeOut(tween(120)),
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = miniBottom),
+                    enter = EnterTransition.None,
+                    exit = ExitTransition.None,
                 ) {
                     MiniPlayer(actions)
                 }
-                // Full player: slides up when opened; follows your finger when dragged down and
-                // shrinks toward the bottom-right corner (see PlayerSheet).
+                // Full player: slides up when opened; when dragged down / minimized its video shrinks
+                // into the mini player's spot while everything else fades (see PlayerSheet).
                 AnimatedVisibility(
                     visible = expanded,
-                    enter = slideInVertically(tween(260)) { it } + fadeIn(tween(200)),
+                    // Growing out of the mini player is animated by the sheet; otherwise slide up.
+                    enter = if (actions.sheet.fromMini) EnterTransition.None
+                    else slideInVertically(tween(260)) { it } + fadeIn(tween(200)),
                     exit = ExitTransition.None,
                 ) {
                     val sheet = actions.sheet
@@ -159,21 +174,20 @@ class MainActivity : ComponentActivity() {
                             }
                             .pointerInput(sheet) { detectSheetDrag(sheet) }
                     ) {
+                        val bg = MaterialTheme.colorScheme.background
                         Box(
                             Modifier.fillMaxSize()
                                 .graphicsLayer {
                                     val f = sheet.fraction
-                                    val k = 0.6f
-                                    transformOrigin = TransformOrigin(1f, 1f)
-                                    scaleX = 1f - k * f
-                                    scaleY = 1f - k * f
-                                    // Top edge tracks the finger exactly: H*k*f + t == offset.
-                                    translationY = sheet.offset.value * (1f - k)
-                                    alpha = 1f - 0.5f * f
-                                    shape = RoundedCornerShape((24 * f).dp)
-                                    clip = f > 0f
+                                    val g = sheet.geometry
+                                    transformOrigin = TransformOrigin(0f, 0f)
+                                    val scale = 1f + (g.scale - 1f) * f
+                                    scaleX = scale
+                                    scaleY = scale
+                                    translationX = g.tx * f
+                                    translationY = g.ty * f
                                 }
-                                .background(MaterialTheme.colorScheme.background)
+                                .drawBehind { drawRect(bg.copy(alpha = 1f - sheet.fraction)) }
                                 // Swallow taps so nothing underneath reacts.
                                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}
                         ) {

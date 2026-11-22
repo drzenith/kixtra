@@ -307,6 +307,7 @@ class PlayerController(private val context: Context, private val store: Store) {
                 applyVideoDisabled()
                 player.prepare()
                 player.play()
+                if (p.seekable) warmPreview(startPositionMs ?: player.currentPosition)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -462,12 +463,17 @@ class PlayerController(private val context: Context, private val store: Store) {
     private var preview: ExoPlayer? = null
     private var previewUrl: String? = null
 
+    private var previewCheckpoint = -1L
+
     private fun previewPlayer(): ExoPlayer = preview ?: ExoPlayer.Builder(
         context,
         DefaultRenderersFactory(context)
             .setEnableDecoderFallback(true)
             .setMediaCodecSelector(codecSelector),
-    ).build().also { pp ->
+    )
+        // Only ever needs one frame: keep the buffer tiny so each preview loads fast.
+        .setLoadControl(DefaultLoadControl.Builder().setBufferDurationsMs(1_000, 2_000, 250, 500).build())
+        .build().also { pp ->
         pp.volume = 0f
         pp.setSeekParameters(SeekParameters.CLOSEST_SYNC)
         pp.trackSelectionParameters = pp.trackSelectionParameters.buildUpon()
@@ -477,7 +483,34 @@ class PlayerController(private val context: Context, private val store: Store) {
         preview = pp
     }
 
-    fun previewSeek(positionMs: Long) {
+    /** Loads the playlist in the background so the first scrub preview doesn't wait on it. */
+    private fun warmPreview(positionMs: Long) {
+        if (previewUrl == currentUrl) return
+        previewCheckpoint = -1
+        previewSeek(positionMs)
+    }
+
+    /**
+     * Scrub position -> preview. The VOD is split into 100 checkpoints (a ratio, so it works the
+     * same for 20-minute and 30-hour VODs). Each loads once and stays until the finger moves well
+     * into another checkpoint, so small movements don't restart the load.
+     */
+    fun previewScrub(positionMs: Long) {
+        val dur = player.duration
+        if (dur <= 0) {
+            previewSeek(positionMs)
+            return
+        }
+        val step = (dur / 100).coerceAtLeast(1_000)
+        val current = previewCheckpoint
+        if (current >= 0 && abs(positionMs - current * step) < step * 3 / 4) return
+        val idx = ((positionMs + step / 2) / step).coerceIn(0, 100)
+        if (idx == current) return
+        previewCheckpoint = idx
+        previewSeek((idx * step).coerceAtMost(dur - 1))
+    }
+
+    private fun previewSeek(positionMs: Long) {
         val url = currentUrl ?: return
         val pp = previewPlayer()
         if (previewUrl != url) {
@@ -503,6 +536,7 @@ class PlayerController(private val context: Context, private val store: Store) {
         preview?.release()
         preview = null
         previewUrl = null
+        previewCheckpoint = -1
     }
 
     fun stop() {

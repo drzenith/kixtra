@@ -5,6 +5,7 @@ import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.drzenith.kixtra.App
@@ -89,6 +90,8 @@ sealed class Screen {
         var tab by mutableIntStateOf(0)
         val follows = Loadable<List<Channel>>()
         var followsLoadedAt = 0L
+        /** Live thumbnails for followed channels, from the same source as the Live tab. */
+        val followThumbs = mutableStateMapOf<String, String>()
         val streams = streamPaged()
         val streamFilters = StreamFilters()
         val categories = Paged<Category> { it.slug }

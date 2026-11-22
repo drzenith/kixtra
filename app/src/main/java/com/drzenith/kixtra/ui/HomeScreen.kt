@@ -136,14 +136,50 @@ private fun refreshFollows(state: Screen.Home, follows: List<FollowedChannel>, s
     state.follows.error = null
     scope.launch {
         try {
-            state.follows.data = fetchFollows(follows, store)
+            val channels = fetchFollows(follows, store)
+            state.follows.data = channels
             state.followsLoadedAt = System.currentTimeMillis()
+            loadFollowThumbs(state, channels.filter { it.live != null })
         } catch (e: Exception) {
             state.follows.error = e.message
         } finally {
             state.follows.loading = false
         }
     }
+}
+
+/**
+ * Live follows' thumbnails come from the same source as the Live tab (its stream list), since the
+ * channel endpoint's thumbnails don't load. Channels not in the top of that list are looked up via
+ * search, which returns streams in the same format.
+ */
+private suspend fun loadFollowThumbs(state: Screen.Home, live: List<Channel>) {
+    if (live.isEmpty()) return
+    val wanted = live.map { it.slug.lowercase() }.toMutableSet()
+    val found = HashMap<String, String>()
+    var cursor: String? = null
+    for (page in 0 until 2) {
+        val p = runCatching { KickApi.liveStreams(cursor) }.getOrNull() ?: break
+        p.items.forEach { s ->
+            val key = s.slug.lowercase()
+            if (key in wanted && s.thumbnail != null) found[key] = s.thumbnail
+        }
+        wanted.removeAll(found.keys)
+        cursor = p.next ?: break
+        if (wanted.isEmpty()) break
+    }
+    if (wanted.isNotEmpty()) {
+        coroutineScope {
+            live.filter { it.slug.lowercase() in wanted }.map { ch ->
+                async {
+                    runCatching { KickApi.search(ch.username) }.getOrNull()?.streams
+                        ?.firstOrNull { it.slug.equals(ch.slug, true) }?.thumbnail
+                        ?.let { ch.slug.lowercase() to it }
+                }
+            }.awaitAll().filterNotNull().forEach { (k, v) -> found[k] = v }
+        }
+    }
+    state.followThumbs.putAll(found)
 }
 
 /** Followed channels split into live (most viewers first) and offline (most recently live first). */
@@ -158,7 +194,9 @@ private fun splitFollows(state: Screen.Home, follows: List<FollowedChannel>): Pa
 
 /** Prefer the Live tab's thumbnail for a channel (those load reliably), else the channel's own. */
 private fun thumbFor(state: Screen.Home, slug: String, fallback: String?): String? =
-    state.streams.items.firstOrNull { it.slug.equals(slug, true) }?.thumbnail ?: fallback
+    state.followThumbs[slug.lowercase()]
+        ?: state.streams.items.firstOrNull { it.slug.equals(slug, true) }?.thumbnail
+        ?: fallback
 
 /** Full-width grid item (headers, footers, messages). */
 fun LazyGridScope.full(key: String? = null, content: @Composable () -> Unit) =

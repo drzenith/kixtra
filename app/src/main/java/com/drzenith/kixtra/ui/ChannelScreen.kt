@@ -106,7 +106,12 @@ fun ChannelScreen(state: Screen.ChannelPage, actions: Actions) {
                 full("live") {
                     Column(Modifier.padding(top = 4.dp)) {
                         StreamCard(
-                            StreamItem(ch.slug, ch.username, live.title, live.viewers, live.category, live.thumbnail, ch.avatar),
+                            StreamItem(
+                                ch.slug, ch.username, live.title, live.viewers, live.category,
+                                // Prefer the Live-tab-style thumbnail if Home already has one.
+                                (actions.nav.stack.firstOrNull() as? Screen.Home)?.followThumbs?.get(ch.slug.lowercase()) ?: live.thumbnail,
+                                ch.avatar,
+                            ),
                             onClick = { actions.playLive(ch) },
                             onChannel = {},
                         )
