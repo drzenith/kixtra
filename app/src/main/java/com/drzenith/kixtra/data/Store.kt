@@ -35,11 +35,6 @@ class Store(context: Context) {
         get() = prefs.getInt("quality", 0)
         set(v) = prefs.edit { putInt("quality", v) }
 
-    /** Waydroid/emulators often have broken hardware decoders; auto-enabled after a decode error. */
-    var softwareDecoding: Boolean
-        get() = prefs.getBoolean("sw_decode", false)
-        set(v) = prefs.edit { putBoolean("sw_decode", v) }
-
     /** Default stream language code ("" = any). */
     var defaultLanguage: String
         get() = prefs.getString("language", "") ?: ""
@@ -123,8 +118,6 @@ class Store(context: Context) {
         prefs.edit { putString("follows", arr.toString()) }
         _follows.value = list
     }
-
-    fun isFollowed(slug: String) = _follows.value.any { it.slug.equals(slug, true) }
 
     fun toggleFollow(channel: FollowedChannel) {
         val cur = _follows.value

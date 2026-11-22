@@ -150,6 +150,7 @@ object KickApi {
             language = ls.s("language") ?: ls.s("lang_iso"),
             mature = ls.b("is_mature") ?: false,
             startTime = ls.s("start_time") ?: ls.s("started_at") ?: ls.s("created_at"),
+            livestreamId = ls.l("id") ?: 0,
         )
     }
 

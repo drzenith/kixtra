@@ -38,6 +38,8 @@ data class StreamItem(
     val mature: Boolean = false,
     /** When the stream started (for the uptime badge). */
     val startTime: String? = null,
+    /** The livestream's id (links it to your saved spot in its VOD). */
+    val livestreamId: Long = 0,
 )
 
 data class Clip(
@@ -101,5 +103,23 @@ data class Video(
 }
 
 data class Page<T>(val items: List<T>, val next: String?)
+
+/** The (still growing) VOD of the stream this channel is live with right now, if any. */
+fun Channel.liveVideo(): Video? {
+    val l = live ?: return null
+    return Video(
+        livestreamId = l.id,
+        uuid = null,
+        vodId = l.vodId,
+        title = l.title,
+        durationMs = 0,
+        isLive = true,
+        thumbnail = l.thumbnail,
+        startTime = l.startTime,
+        views = 0,
+        category = l.category,
+        source = null,
+    )
+}
 
 data class FollowedChannel(val slug: String, val username: String, val avatar: String?)

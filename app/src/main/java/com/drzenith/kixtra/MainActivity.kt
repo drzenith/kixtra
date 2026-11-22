@@ -15,11 +15,8 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
 import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.graphics.TransformOrigin
@@ -83,9 +80,10 @@ class MainActivity : ComponentActivity() {
 
         addOnPictureInPictureModeChangedListener(Consumer { info ->
             inPip.value = info.isInPictureInPictureMode
-            // PiP window dismissed by the user while the activity is stopped: stop audio too.
+            // PiP window closed by the user (activity no longer visible): keep listening in the
+            // background if that's on, otherwise stop.
             if (!info.isInPictureInPictureMode && !lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
-                app.playerController.player.pause()
+                app.playerController.onBackground()
             }
         })
 

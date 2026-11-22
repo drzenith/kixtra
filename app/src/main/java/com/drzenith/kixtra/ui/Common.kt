@@ -52,6 +52,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import com.drzenith.kixtra.App
 import com.drzenith.kixtra.chat.parseKickTime
 import com.drzenith.kixtra.data.Category
 import com.drzenith.kixtra.data.StreamItem
@@ -163,8 +164,29 @@ fun Thumb(url: String?, modifier: Modifier = Modifier, overlay: @Composable () -
     }
 }
 
+/** Recomposes every [periodMs] so live times/progress stay current. */
+@Composable
+fun rememberTicker(periodMs: Long = 30_000): Long {
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(periodMs) {
+        while (true) {
+            kotlinx.coroutines.delay(periodMs)
+            now = System.currentTimeMillis()
+        }
+    }
+    return now
+}
+
 @Composable
 fun StreamCard(item: StreamItem, onClick: () -> Unit, onChannel: () -> Unit) {
+    val now = rememberTicker()
+    // How far into this stream you are, if you've watched part of it (it keeps growing).
+    val progress = remember(item.livestreamId, item.startTime, now) {
+        val saved = if (item.livestreamId > 0) App.instance.store.position("ls_${item.livestreamId}") else 0L
+        val started = parseKickTime(item.startTime)?.toEpochMilli()
+        if (saved <= 0 || started == null || now <= started) null
+        else (saved.toFloat() / (now - started)).coerceIn(0f, 1f)
+    }
     Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 8.dp)) {
         Thumb(item.thumbnail) {
             Box(Modifier.fillMaxSize().padding(6.dp)) {
@@ -172,8 +194,13 @@ fun StreamCard(item: StreamItem, onClick: () -> Unit, onChannel: () -> Unit) {
                     Badge("LIVE", LiveRed)
                     Badge("${compact(item.viewers)} viewers", Color(0xCC000000))
                 }
-                uptime(item.startTime)?.let {
+                remember(item.startTime, now) { uptime(item.startTime) }?.let {
                     Badge(it, Color(0xCC000000), modifier = Modifier.align(Alignment.BottomEnd))
+                }
+            }
+            progress?.let { frac ->
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomStart) {
+                    Box(Modifier.fillMaxWidth(frac).height(3.dp).background(BrandGradient))
                 }
             }
         }
@@ -280,8 +307,9 @@ fun BackBar(title: String, onBack: () -> Unit, actions: @Composable RowScope.() 
 
 fun languageName(code: String): String {
     if (code.isBlank()) return "Any language"
-    val name = Locale.forLanguageTag(code).getDisplayLanguage(Locale.getDefault())
-    return if (name.isNullOrBlank() || name == code) code.uppercase() else name
+    // Full name incl. region, so variants are distinguishable ("English (United Kingdom)").
+    val name = Locale.forLanguageTag(code.replace('_', '-')).getDisplayName(Locale.getDefault())
+    return if (name.isNullOrBlank() || name.equals(code, true)) code.uppercase() else name
 }
 
 /** Kick's list of stream language codes, fetched once. */
@@ -292,7 +320,10 @@ object Languages {
     suspend fun ensureLoaded() {
         if (loaded) return
         loaded = true
+        // Kick lists some languages under more than one code; keep one entry per name.
         val fresh = KickApi.languageCodes()
+            .distinctBy { it.lowercase().replace('_', '-') }
+            .distinctBy { languageName(it) }
         codes.clear()
         codes.addAll(fresh.sortedBy { languageName(it) })
     }

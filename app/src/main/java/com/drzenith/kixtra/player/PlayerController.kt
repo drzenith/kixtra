@@ -34,11 +34,11 @@ import com.drzenith.kixtra.net.Http
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.Request
-import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import com.drzenith.kixtra.data.Channel
 import com.drzenith.kixtra.data.Clip
 import com.drzenith.kixtra.data.Store
 import com.drzenith.kixtra.data.Video
+import com.drzenith.kixtra.data.liveVideo
 import com.drzenith.kixtra.net.KickApi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -93,17 +93,10 @@ class PlayerController(private val context: Context, private val store: Store) {
     private val tag = "PlayerController"
     private val scope = MainScope()
 
-    // Software-first decoder ordering when enabled (read each time a decoder is picked).
-    private val codecSelector = MediaCodecSelector { mime, secure, tunneling ->
-        val infos = MediaCodecSelector.DEFAULT.getDecoderInfos(mime, secure, tunneling)
-        if (store.softwareDecoding) infos.sortedBy { !it.softwareOnly } else infos
-    }
-
     val player: ExoPlayer = ExoPlayer.Builder(
         context,
-        DefaultRenderersFactory(context)
-            .setEnableDecoderFallback(true)
-            .setMediaCodecSelector(codecSelector),
+        // If a decoder fails to start, try the next one the device has.
+        DefaultRenderersFactory(context).setEnableDecoderFallback(true),
     )
         // Time-based buffer (not capped by bytes) so high bitrates at 2-4x keep enough runway; 60s max keeps memory sane.
         .setLoadControl(
@@ -299,19 +292,6 @@ class PlayerController(private val context: Context, private val store: Store) {
                     player.prepare()
                     return
                 }
-                val decoderError = e.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
-                    e.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
-                    e.errorCode == PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED ||
-                    e.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES ||
-                    e.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED
-                if (decoderError && !store.softwareDecoding) {
-                    // Hardware decoder failed (common on Waydroid/emulators): switch to software and resume.
-                    store.softwareDecoding = true
-                    notice.value = "Hardware decoder failed, switched to software decoding (change in Settings)"
-                    val pos = if (p != null && p.seekable) player.currentPosition else null
-                    if (p != null) load(p, pos)
-                    return
-                }
                 // Kick's playlist didn't grow when re-checked: fall back to reloading fresh copies.
                 val stuck = generateSequence(e as Throwable) { it.cause }
                     .any { it is HlsPlaylistTracker.PlaylistStuckException }
@@ -322,7 +302,7 @@ class PlayerController(private val context: Context, private val store: Store) {
                     return
                 }
                 // Signed playlist URLs expire; for VODs try once more with a fresh URL.
-                if (p != null && !decoderError && System.currentTimeMillis() - lastRefreshAt > 20_000) {
+                if (p != null && System.currentTimeMillis() - lastRefreshAt > 20_000) {
                     reload(keepPosition = true)
                 } else {
                     error.value = "Playback error: ${e.errorCodeName}"
@@ -364,8 +344,6 @@ class PlayerController(private val context: Context, private val store: Store) {
         }
     }
 
-    fun isVod() = current.value?.seekable == true
-
     private var resolveJob: Job? = null
 
     /** Opens a live channel by slug (fetches fresh channel info first). */
@@ -403,7 +381,7 @@ class PlayerController(private val context: Context, private val store: Store) {
      * live stream instead.
      */
     fun playChannel(ch: Channel) {
-        val dvr = if (store.rewindableLive) com.drzenith.kixtra.ui.Actions.dvrVideo(ch) else null
+        val dvr = if (store.rewindableLive) ch.liveVideo() else null
         if (dvr == null) {
             play(Playable.Live(ch))
             return
@@ -468,7 +446,7 @@ class PlayerController(private val context: Context, private val store: Store) {
                         loading.value = false
                     }
                     src.dvr -> {
-                        val v = com.drzenith.kixtra.ui.Actions.dvrVideo(src.channel)
+                        val v = src.channel.liveVideo()
                         if (v == null) {
                             error.value = "Couldn't find the VOD this clip is from"
                             loading.value = false
@@ -495,12 +473,13 @@ class PlayerController(private val context: Context, private val store: Store) {
         loadJob = scope.launch {
             try {
                 var p = p
+                var dvrUrl: String? = null
                 val url: String
                 val metaTitle: String
                 // Live channel opened at its live point: if Kick has no VOD for it yet, play the
                 // plain live stream instead.
                 if (p is Playable.Vod && p.dvr && p.startAtLive) {
-                    val dvrUrl = KickApi.liveDvrUrl(p.channel)
+                    dvrUrl = KickApi.liveDvrUrl(p.channel)
                     if (dvrUrl == null && p.channel.live?.playbackUrl != null) {
                         p = Playable.Live(p.channel)
                         current.value = p
@@ -516,7 +495,7 @@ class PlayerController(private val context: Context, private val store: Store) {
                     }
                     is Playable.Vod -> {
                         url = if (p.dvr) {
-                            KickApi.liveDvrUrl(p.channel)
+                            (dvrUrl ?: KickApi.liveDvrUrl(p.channel))
                                 ?: throw IllegalStateException("This stream has no VOD yet")
                         } else {
                             KickApi.vodUrl(p.video)
@@ -637,8 +616,8 @@ class PlayerController(private val context: Context, private val store: Store) {
     }
 
     fun setSpeed(s: Float) {
+        // Saved as your VOD speed by the playback-parameters listener.
         player.setPlaybackSpeed(s)
-        if (isVod()) store.vodSpeed = s
     }
 
     // ---------- Quality ----------
@@ -876,9 +855,7 @@ class PlayerController(private val context: Context, private val store: Store) {
 
     private fun previewPlayer(): ExoPlayer = preview ?: ExoPlayer.Builder(
         context,
-        DefaultRenderersFactory(context)
-            .setEnableDecoderFallback(true)
-            .setMediaCodecSelector(codecSelector),
+        DefaultRenderersFactory(context).setEnableDecoderFallback(true),
     )
         // Only ever needs one frame: keep the buffer tiny so each preview loads fast.
         .setLoadControl(DefaultLoadControl.Builder().setBufferDurationsMs(1_000, 2_000, 250, 500).build())

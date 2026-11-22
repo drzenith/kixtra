@@ -22,6 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -32,7 +33,6 @@ fun SettingsScreen(actions: Actions) {
     var bg by remember { mutableStateOf(store.backgroundAudio) }
     var pip by remember { mutableStateOf(store.pipEnabled) }
     var chat by remember { mutableStateOf(store.chatEnabled) }
-    var sw by remember { mutableStateOf(store.softwareDecoding) }
     var rewind by remember { mutableStateOf(store.rewindableLive) }
     var mature by remember { mutableStateOf(store.hideMature) }
     var language by remember { mutableStateOf(store.defaultLanguage) }
@@ -58,9 +58,6 @@ fun SettingsScreen(actions: Actions) {
                     }
                 }
             }
-            Toggle("Hide 18+ streams", "Hides streams marked mature in Live and category lists", mature) {
-                mature = it; store.hideMature = it
-            }
 
             Section("Playback")
             Toggle(
@@ -68,25 +65,27 @@ fun SettingsScreen(actions: Actions) {
                 "Live streams play their VOD at the live point, so you can scroll back anytime. Turn off for the plain live stream (a few seconds less delay, no rewinding).",
                 rewind,
             ) { rewind = it; store.rewindableLive = it }
-            Toggle("Background audio", "Keep listening when you leave the app (video stops downloading)", bg) {
-                bg = it; store.backgroundAudio = it
-            }
-            Toggle("Picture-in-picture", "Shrink the player when you press Home while watching", pip) {
+            Toggle("Picture-in-picture", "Press Home while watching to keep the video in a small window", pip) {
                 pip = it; store.pipEnabled = it
             }
             Toggle(
-                "Software video decoding",
-                "Use if video fails or shows black (common on Waydroid/emulators). Uses more battery and can stutter at high speeds.",
-                sw,
-            ) { sw = it; store.softwareDecoding = it }
+                "Background audio",
+                "Keep listening when you leave the app or close the picture-in-picture window (video stops downloading)",
+                bg,
+            ) { bg = it; store.backgroundAudio = it }
             Toggle("Chat", "Live chat and VOD chat replay under the player", chat) {
                 chat = it; store.chatEnabled = it; actions.player.syncChat()
             }
+
+            Section("Content")
+            Toggle("Hide 18+ streams", "Hides streams marked mature in Live and category lists", mature) {
+                mature = it; store.hideMature = it
+            }
             Text(
-                "Quality and VOD speed are remembered from the last ones you picked in the player.\n\n" +
-                    "Kixtra uses Kick's unofficial API; if something stops loading, Kick probably changed it.",
+                "Kixtra uses Kick's unofficial API; if something stops loading, Kick probably changed it.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 13.sp,
+                fontStyle = FontStyle.Italic,
                 modifier = Modifier.padding(16.dp),
             )
         }

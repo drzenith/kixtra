@@ -15,9 +15,7 @@ import android.view.LayoutInflater
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import coil3.SingletonImageLoader
 import coil3.compose.AsyncImage
-import coil3.request.ImageRequest
 import android.widget.ImageButton
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.height
@@ -43,7 +41,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -101,16 +98,12 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import androidx.media3.common.C
 import androidx.media3.common.Player
 import androidx.media3.ui.DefaultTimeBar
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.TimeBar
 import com.drzenith.kixtra.chat.ChatSource
 import com.drzenith.kixtra.chat.ChatView
-import com.drzenith.kixtra.chat.LiveChat
-import com.drzenith.kixtra.chat.ReplayChat
-import com.drzenith.kixtra.chat.parseKickTime
 import com.drzenith.kixtra.ui.AccentCyan
 import com.drzenith.kixtra.ui.AccentViolet
 import com.drzenith.kixtra.ui.Actions
@@ -794,6 +787,12 @@ private fun InfoBar(actions: Actions) {
         is Playable.Vod -> p.video.title
         is Playable.ClipItem -> p.clip.title
     }
+    val now = com.drzenith.kixtra.ui.rememberTicker()
+    // Live: viewers + how long it's been live, e.g. "LIVE • 1.2K • 2h 15m".
+    val liveBadge = remember(ch.live, now) {
+        listOfNotNull("LIVE", compact(ch.live?.viewers ?: 0), com.drzenith.kixtra.ui.uptime(ch.live?.startTime))
+            .joinToString(" • ")
+    }
     Column(Modifier.fillMaxWidth().padding(start = 2.dp, end = 10.dp, top = 4.dp, bottom = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { actions.minimizePlayer() }) {
@@ -803,17 +802,14 @@ private fun InfoBar(actions: Actions) {
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(title, maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(ch.username, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp,
-                        modifier = Modifier.clickable { actions.openChannel(ch.slug) })
-                    Spacer(Modifier.width(8.dp))
-                    when {
-                        p is Playable.Live -> Badge("LIVE • ${compact(ch.live?.viewers ?: 0)}", LiveRed)
-                        p is Playable.Vod && p.dvr -> Badge("LIVE • ${compact(ch.live?.viewers ?: 0)}", LiveRed)
-                        p is Playable.Vod && p.video.isLive -> Badge("LIVE VOD", AccentCyan, Color(0xFF032B33))
-                        p is Playable.ClipItem -> Badge("CLIP", Color(0xFF3A3D41))
-                    }
-                }
+                Text(ch.username, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp,
+                    modifier = Modifier.clickable { actions.openChannel(ch.slug) })
+            }
+            Spacer(Modifier.width(8.dp))
+            when {
+                p is Playable.Live || (p is Playable.Vod && p.dvr) -> Badge(liveBadge, LiveRed)
+                p is Playable.Vod && p.video.isLive -> Badge("LIVE VOD", AccentCyan, Color(0xFF032B33))
+                p is Playable.ClipItem -> Badge("CLIP", Color(0xFF3A3D41))
             }
         }
     }

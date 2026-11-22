@@ -112,6 +112,7 @@ fun ChannelScreen(state: Screen.ChannelPage, actions: Actions) {
                                 (actions.nav.stack.firstOrNull() as? Screen.Home)?.followThumbs?.get(ch.slug.lowercase()) ?: live.thumbnail,
                                 ch.avatar,
                                 startTime = live.startTime,
+                                livestreamId = live.id,
                             ),
                             onClick = { actions.playLive(ch) },
                             onChannel = {},
@@ -134,7 +135,7 @@ fun ChannelScreen(state: Screen.ChannelPage, actions: Actions) {
                     videos != null && videos.isEmpty() -> full { EmptyBox("No videos") }
                     videos != null -> itemsIndexed(videos, key = { i, v -> "v_${v.key}_$i" }) { _, v ->
                         VideoCard(v, actions.store.positionFor(v)) {
-                            if (v.isLive && ch.live != null) actions.watchFromStart(ch) else actions.playVod(ch, v)
+                            actions.playVod(ch, v)
                         }
                     }
                     state.videos.error != null -> full { ErrorBox(state.videos.error ?: "") { loadChannel(state, scope) } }

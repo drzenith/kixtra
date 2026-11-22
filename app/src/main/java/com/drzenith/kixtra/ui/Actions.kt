@@ -8,6 +8,7 @@ import com.drzenith.kixtra.data.Clip
 import com.drzenith.kixtra.data.FollowedChannel
 import com.drzenith.kixtra.data.Store
 import com.drzenith.kixtra.data.Video
+import com.drzenith.kixtra.data.liveVideo
 import com.drzenith.kixtra.player.Playable
 import com.drzenith.kixtra.player.PlayerController
 import com.drzenith.kixtra.player.PlayerSheet
@@ -83,7 +84,7 @@ class Actions(val nav: Navigator, val player: PlayerController, val store: Store
 
     /** Start the growing VOD of the current live stream from the beginning. */
     fun watchFromStart(channel: Channel) {
-        player.play(Playable.Vod(channel, dvrVideo(channel) ?: return, dvr = true), startAtMs = 0L)
+        player.play(Playable.Vod(channel, channel.liveVideo() ?: return, dvr = true), startAtMs = 0L)
         showPlayer()
     }
 
@@ -122,24 +123,4 @@ class Actions(val nav: Navigator, val player: PlayerController, val store: Store
 
     /** Back from a regular screen. */
     fun back(): Boolean = nav.pop()
-
-    companion object {
-        /** A Video standing in for the still-growing VOD of a channel's current stream. */
-        fun dvrVideo(channel: Channel): Video? {
-            val live = channel.live ?: return null
-            return Video(
-                livestreamId = live.id,
-                uuid = null,
-                vodId = live.vodId,
-                title = live.title,
-                durationMs = 0,
-                isLive = true,
-                thumbnail = live.thumbnail,
-                startTime = live.startTime,
-                views = 0,
-                category = live.category,
-                source = null,
-            )
-        }
-    }
 }
