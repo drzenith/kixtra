@@ -293,17 +293,21 @@ fun PlayerScreen(actions: Actions) {
 
     val video: @Composable (Modifier) -> Unit = { m ->
         Box(m.background(Color.Black).onGloballyPositioned { sheet.videoCoords = it }) {
-            // Hidden surface for the background preview player (drawn underneath the video).
+            // Hidden surface for the background preview player. Nearly fully transparent: it still
+            // has to be drawn for Android to give it a surface, and frames are copied out of its
+            // buffer (unaffected by the view's alpha).
             if (seekable) {
                 AndroidView(
-                    factory = { ctx -> TextureView(ctx).also { pc.attachPreview(it) } },
-                    modifier = Modifier.size(32.dp, 18.dp),
+                    factory = { ctx -> TextureView(ctx).also { it.alpha = 0.01f; pc.attachPreview(it) } },
+                    modifier = Modifier.align(Alignment.Center).size(32.dp, 18.dp),
                     onRelease = { pc.detachPreview(it) },
                 )
             }
             VideoBox(
                 pc.player, Modifier.fillMaxSize(), useController = true, fullscreen = fullscreen,
                 onFullscreen = ::setFullscreen, onControls = { controlsVisible = it }, bar = bar, onScrub = onScrub,
+                // With chat beside the video, sit the picture against the chat (no black gap).
+                alignEnd = chat != null && ((fullscreen && chatInLandscape) || (!fullscreen && wide)),
             )
             when {
                 loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
@@ -615,6 +619,7 @@ internal fun VideoBox(
     bar: BarSpec? = null,
     onScrub: ((Long?) -> Unit)? = null,
     textureView: Boolean = true,
+    alignEnd: Boolean = false,
 ) {
     val fs by rememberUpdatedState(onFullscreen)
     val ctl by rememberUpdatedState(onControls)
@@ -686,6 +691,15 @@ internal fun VideoBox(
         update = { v ->
             v.useController = useController
             v.setFullscreenButtonState(fullscreen)
+            // Letterbox placement: centered normally, against the right edge when chat is beside it.
+            v.findViewById<View>(androidx.media3.ui.R.id.exo_content_frame)?.let { frame ->
+                val lp = frame.layoutParams as? android.widget.FrameLayout.LayoutParams
+                val gravity = if (alignEnd) (Gravity.END or Gravity.CENTER_VERTICAL) else Gravity.CENTER
+                if (lp != null && lp.gravity != gravity) {
+                    lp.gravity = gravity
+                    frame.layoutParams = lp
+                }
+            }
             val b = v.tag as? BarButtons
             val spec = bar
             if (b != null && spec != null) {
