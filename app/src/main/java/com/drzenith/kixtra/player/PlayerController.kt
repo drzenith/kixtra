@@ -69,6 +69,8 @@ data class Quality(val label: String, val height: Int, val fps: Int, val group: 
  * Owns the single ExoPlayer instance. The UI, PiP and the background MediaSession all share it,
  * so playback carries on when the app is in the background.
  */
+private const val CHECKPOINTS = 100
+
 class PlayerController(private val context: Context, private val store: Store) {
     private val tag = "PlayerController"
     private val scope = MainScope()
@@ -349,7 +351,10 @@ class PlayerController(private val context: Context, private val store: Store) {
                 applyVideoDisabled()
                 player.prepare()
                 player.play()
-                if (p.seekable) warmPreview(startPositionMs ?: player.currentPosition)
+                if (p.seekable && previewUrl != url) {
+                    releasePreview()
+                    startPreviews(url, startPositionMs ?: player.currentPosition)
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -497,20 +502,34 @@ class PlayerController(private val context: Context, private val store: Store) {
     }
 
     // ---------- Scrub preview ----------
-    // Fast path: Kick's VODs are Amazon IVS recordings, which can store a JPEG thumbnail every N
-    // seconds next to the video (…/media/thumbnails/thumb<n>.jpg). When a VOD starts we look for
-    // them and work out the interval; scrubbing then just shows small images.
-    // Fallback: a second, muted, lowest-quality player that seeks to the nearest of 100
-    // checkpoints and renders that frame; frames it has rendered are cached for instant revisits.
+    // Previews are prepared in the background while the VOD plays, so scrubbing is instant:
+    //  * Fast path: Kick's VODs are Amazon IVS recordings, which can store a JPEG every N seconds
+    //    next to the video (…/media/thumbnails/thumb<n>.jpg). We look for them, work out the
+    //    interval, and preload an evenly spaced set (up to ~200 small images).
+    //  * Fallback: a hidden, muted, lowest-quality player walks through 100 checkpoints (a ratio of
+    //    the VOD length, so 20-minute and 30-hour VODs behave the same) and keeps a small frame of
+    //    each. On mobile data this only happens on demand while scrubbing.
 
-    /** IVS thumbnail track: thumb<i>.jpg every [intervalMs]. */
-    class ThumbTrack(private val base: String, private val query: String, val intervalMs: Long) {
+    /** IVS thumbnail track: thumb<i>.jpg every [intervalMs]; [step] = spacing of preloaded ones. */
+    class ThumbTrack(
+        private val base: String,
+        private val query: String,
+        val intervalMs: Long,
+        val count: Int,
+        val step: Int,
+    ) {
         fun url(index: Int): String = base + index + ".jpg" + (if (query.isEmpty()) "" else "?$query")
-        fun indexFor(positionMs: Long): Int = ((positionMs + intervalMs / 2) / intervalMs).toInt().coerceAtLeast(0)
+
+        /** Nearest preloaded thumbnail for a position. */
+        fun indexFor(positionMs: Long): Int {
+            val raw = (positionMs.toDouble() / intervalMs).toInt().coerceAtLeast(0)
+            return ((raw + step / 2) / step) * step
+        }
     }
 
     val thumbTrack = MutableStateFlow<ThumbTrack?>(null)
     private var thumbJob: Job? = null
+    private var preloadJob: Job? = null
 
     private suspend fun headOk(url: String): Boolean = withContext(Dispatchers.IO) {
         runCatching {
@@ -520,61 +539,106 @@ class PlayerController(private val context: Context, private val store: Store) {
         }.getOrDefault(false)
     }
 
-    private fun probeThumbs(url: String) {
+    private suspend fun awaitDuration(): Long {
+        var dur = player.duration
+        var tries = 0
+        while (dur <= 0 && tries < 80) {
+            delay(250)
+            dur = player.duration
+            tries++
+        }
+        return dur
+    }
+
+    /** Looks for IVS thumbnails next to the playlist; returns null if there are none. */
+    private suspend fun findThumbs(url: String, dur: Long): ThumbTrack? {
+        if (!url.contains("/media/hls/")) return null
+        val root = url.substringBefore("/media/hls/") + "/media/thumbnails/"
+        val query = url.substringAfter('?', "")
+        fun u(path: String) = root + path + (if (query.isEmpty()) "" else "?$query")
+        val dir = listOf("", "high/", "1080p/", "720p/", "480p/", "360p/", "160p/", "lowest/")
+            .firstOrNull { headOk(u(it + "thumb0.jpg")) }
+        if (dir == null) {
+            Log.i(tag, "No IVS thumbnails under $root; using video previews")
+            return null
+        }
+        // Find the last thumbnail: exponential probe, then binary search.
+        var hi = 1
+        while (hi < 262_144 && headOk(u(dir + "thumb$hi.jpg"))) hi *= 2
+        var lo = if (hi == 1) 0 else hi / 2
+        while (hi - lo > 1) {
+            val mid = (lo + hi) / 2
+            if (headOk(u(dir + "thumb$mid.jpg"))) lo = mid else hi = mid
+        }
+        val count = lo + 1
+        val raw = dur / count
+        val interval = listOf(1_000L, 2_000L, 5_000L, 10_000L, 15_000L, 20_000L, 30_000L, 60_000L, 120_000L)
+            .minByOrNull { abs(it - raw) }?.takeIf { abs(it - raw) < it / 5 } ?: raw.coerceAtLeast(1_000)
+        Log.i(tag, "IVS thumbnails: $count at ${interval}ms under $root$dir")
+        return ThumbTrack(root + dir + "thumb", query, interval, count, step = (count / 200).coerceAtLeast(1))
+    }
+
+    /** Starts preparing previews for the VOD that just started. */
+    private fun startPreviews(url: String, positionMs: Long) {
         thumbJob?.cancel()
+        preloadJob?.cancel()
         thumbTrack.value = null
-        if (!url.contains("/media/hls/")) return
         thumbJob = scope.launch {
-            // Need the duration to work out the interval.
-            var dur = player.duration
-            var tries = 0
-            while (dur <= 0 && tries < 60) {
-                delay(250)
-                dur = player.duration
-                tries++
-            }
+            val dur = awaitDuration()
             if (dur <= 0) return@launch
-            val root = url.substringBefore("/media/hls/") + "/media/thumbnails/"
-            val query = url.substringAfter('?', "")
-            fun u(path: String) = root + path + (if (query.isEmpty()) "" else "?$query")
-            val dir = listOf("", "high/", "1080p/", "720p/", "480p/", "360p/", "160p/", "lowest/")
-                .firstOrNull { headOk(u(it + "thumb0.jpg")) }
-            if (dir == null) {
-                Log.i(tag, "No IVS thumbnails under $root; using video previews")
+            val track = findThumbs(url, dur)
+            if (track != null) {
+                thumbTrack.value = track
+                // Small images: preload the evenly spaced set on any connection.
+                val loader = coil3.SingletonImageLoader.get(context)
+                var i = 0
+                while (i < track.count) {
+                    loader.enqueue(coil3.request.ImageRequest.Builder(context).data(track.url(i)).build())
+                    i += track.step
+                }
                 return@launch
             }
-            // Find the last thumbnail: exponential probe, then binary search.
-            var hi = 1
-            while (hi < 262_144 && headOk(u(dir + "thumb$hi.jpg"))) hi *= 2
-            var lo = if (hi == 1) 0 else hi / 2
-            while (hi - lo > 1) {
-                val mid = (lo + hi) / 2
-                if (headOk(u(dir + "thumb$mid.jpg"))) lo = mid else hi = mid
-            }
-            val raw = dur / (lo + 1)
-            // Snap to a typical interval if it's close.
-            val interval = listOf(1_000L, 2_000L, 5_000L, 10_000L, 15_000L, 20_000L, 30_000L, 60_000L, 120_000L)
-                .minByOrNull { abs(it - raw) }?.takeIf { abs(it - raw) < it / 5 } ?: raw.coerceAtLeast(1_000)
-            Log.i(tag, "IVS thumbnails: ${lo + 1} at ${interval}ms under $root$dir")
-            thumbTrack.value = ThumbTrack(root + dir + "thumb", query, interval)
+            // Video-frame fallback: warm the preview player; preload all checkpoints on Wi-Fi only.
+            previewSeek(positionMs)
+            if (!isMetered()) preloadJob = scope.launch { preloadCheckpoints() }
         }
     }
+
+    private fun isMetered(): Boolean = runCatching {
+        (context.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager).isActiveNetworkMetered
+    }.getOrDefault(true)
 
     private var currentUrl: String? = null
     private var currentIsHls = true
     private var preview: ExoPlayer? = null
     private var previewUrl: String? = null
-
-    private var previewCheckpoint = -1L
     private var previewView: TextureView? = null
 
-    /** Frames the fallback preview has already rendered, by checkpoint (bounded). */
-    private val frameCache = object : LinkedHashMap<Long, Bitmap>(32, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, Bitmap>?): Boolean = size > 60
+    /** True while the user is dragging the seek bar (background preloading steps aside). */
+    @Volatile private var scrubbing = false
+    private var pendingCheckpoint = -1
+    private var frameWaiter: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+
+    /** One small frame per checkpoint (at most 101 entries, ~15 MB worst case). */
+    private val frameCache = HashMap<Int, Bitmap>()
+
+    /** Bumped whenever a new frame is cached, so the preview recomposes. */
+    val frameVersion = MutableStateFlow(0)
+
+    private fun checkpointStep(): Long = (player.duration / CHECKPOINTS).coerceAtLeast(1_000)
+
+    fun checkpointFor(positionMs: Long): Int {
+        if (player.duration <= 0) return 0
+        val step = checkpointStep()
+        return ((positionMs + step / 2) / step).toInt().coerceIn(0, CHECKPOINTS)
     }
 
-    /** Cached frame for the checkpoint being shown, if we have one. */
-    val cachedFrame = MutableStateFlow<Bitmap?>(null)
+    /** The cached frame for a checkpoint, or the nearest one we have so far. */
+    fun frameFor(checkpoint: Int): Bitmap? {
+        frameCache[checkpoint]?.let { return it }
+        val nearest = frameCache.keys.minByOrNull { abs(it - checkpoint) } ?: return null
+        return frameCache[nearest]
+    }
 
     private fun previewPlayer(): ExoPlayer = preview ?: ExoPlayer.Builder(
         context,
@@ -593,43 +657,54 @@ class PlayerController(private val context: Context, private val store: Store) {
             .build()
         pp.addListener(object : Player.Listener {
             override fun onRenderedFirstFrame() {
-                val cp = previewCheckpoint
-                val bmp = previewView?.getBitmap(320, 180) ?: return
-                if (cp >= 0) frameCache[cp] = bmp
-                cachedFrame.value = bmp
+                val cp = pendingCheckpoint
+                val view = previewView
+                if (cp >= 0 && view != null) {
+                    runCatching { view.getBitmap(256, 144) }.getOrNull()?.let { bmp ->
+                        frameCache[cp] = bmp
+                        frameVersion.value++
+                    }
+                }
+                frameWaiter?.complete(Unit)
             }
         })
         preview = pp
     }
 
-    /** Loads the playlist in the background so the first scrub preview doesn't wait on it. */
-    private fun warmPreview(positionMs: Long) {
-        currentUrl?.let { probeThumbs(it) }
-        if (previewUrl == currentUrl) return
-        previewCheckpoint = -1
-        previewSeek(positionMs)
+    private suspend fun preloadCheckpoints() {
+        if (awaitDuration() <= 0) return
+        val start = checkpointFor(player.currentPosition)
+        val order = (0..CHECKPOINTS).sortedBy { abs(it - start) }.toMutableList()
+        var attempts = 0
+        while (order.isNotEmpty() && attempts < CHECKPOINTS * 2) {
+            while (scrubbing || previewView == null) delay(300)
+            val idx = order.removeAt(0)
+            if (frameCache.containsKey(idx)) continue
+            attempts++
+            val waiter = kotlinx.coroutines.CompletableDeferred<Unit>()
+            frameWaiter = waiter
+            loadCheckpoint(idx)
+            kotlinx.coroutines.withTimeoutOrNull(6_000) { waiter.await() }
+            if (!frameCache.containsKey(idx) && attempts < CHECKPOINTS * 2) order.add(idx)
+        }
     }
 
-    /**
-     * Fallback scrub preview. The VOD is split into 100 checkpoints (a ratio, so it works the same
-     * for 20-minute and 30-hour VODs). Each loads once and stays until the finger moves well into
-     * another checkpoint; already-rendered checkpoints show instantly from the cache.
-     */
+    private fun loadCheckpoint(idx: Int) {
+        pendingCheckpoint = idx
+        previewSeek((idx * checkpointStep()).coerceAtMost((player.duration - 1).coerceAtLeast(0)))
+    }
+
+    /** Called while the seek bar is dragged: loads that checkpoint now if it isn't cached yet. */
     fun previewScrub(positionMs: Long) {
-        val dur = player.duration
-        if (dur <= 0) {
-            previewSeek(positionMs)
-            return
-        }
-        val step = (dur / 100).coerceAtLeast(1_000)
-        val current = previewCheckpoint
-        if (current >= 0 && abs(positionMs - current * step) < step * 3 / 4) return
-        val idx = ((positionMs + step / 2) / step).coerceIn(0, 100)
-        if (idx == current) return
-        previewCheckpoint = idx
-        val cached = frameCache[idx]
-        cachedFrame.value = cached
-        if (cached == null) previewSeek((idx * step).coerceAtMost(dur - 1))
+        scrubbing = true
+        if (thumbTrack.value != null || player.duration <= 0) return
+        val idx = checkpointFor(positionMs)
+        if (frameCache.containsKey(idx) || idx == pendingCheckpoint) return
+        loadCheckpoint(idx)
+    }
+
+    fun scrubEnded() {
+        scrubbing = false
     }
 
     private fun previewSeek(positionMs: Long) {
@@ -648,6 +723,7 @@ class PlayerController(private val context: Context, private val store: Store) {
         pp.playWhenReady = false
     }
 
+    /** The hidden view the preview player renders into (frames are copied out of it). */
     fun attachPreview(view: TextureView) {
         previewView = view
         previewPlayer().setVideoTextureView(view)
@@ -659,14 +735,16 @@ class PlayerController(private val context: Context, private val store: Store) {
     }
 
     private fun releasePreview() {
+        thumbJob?.cancel()
+        preloadJob?.cancel()
+        thumbTrack.value = null
         preview?.release()
         preview = null
         previewUrl = null
-        previewCheckpoint = -1
+        pendingCheckpoint = -1
+        frameWaiter = null
         frameCache.clear()
-        cachedFrame.value = null
-        thumbJob?.cancel()
-        thumbTrack.value = null
+        frameVersion.value++
     }
 
     fun stop() {

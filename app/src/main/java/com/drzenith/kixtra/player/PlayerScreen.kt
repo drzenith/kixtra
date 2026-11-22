@@ -22,6 +22,13 @@ import android.widget.ImageButton
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.PointerEventPass
 import com.drzenith.kixtra.R
 import android.view.TextureView
 import android.view.View
@@ -276,8 +283,7 @@ fun PlayerScreen(actions: Actions) {
     val onScrub: (Long?) -> Unit = { pos ->
         if (seekable) {
             scrubPos = pos
-            // Thumbnail images when the VOD has them; otherwise the video-based preview.
-            if (pos != null && pc.thumbTrack.value == null) pc.previewScrub(pos)
+            if (pos != null) pc.previewScrub(pos) else pc.scrubEnded()
         }
     }
 
@@ -287,6 +293,14 @@ fun PlayerScreen(actions: Actions) {
 
     val video: @Composable (Modifier) -> Unit = { m ->
         Box(m.background(Color.Black).onGloballyPositioned { sheet.videoCoords = it }) {
+            // Hidden surface for the background preview player (drawn underneath the video).
+            if (seekable) {
+                AndroidView(
+                    factory = { ctx -> TextureView(ctx).also { pc.attachPreview(it) } },
+                    modifier = Modifier.size(32.dp, 18.dp),
+                    onRelease = { pc.detachPreview(it) },
+                )
+            }
             VideoBox(
                 pc.player, Modifier.fillMaxSize(), useController = true, fullscreen = fullscreen,
                 onFullscreen = ::setFullscreen, onControls = { controlsVisible = it }, bar = bar, onScrub = onScrub,
@@ -391,8 +405,7 @@ private fun ChatResizeHandle(onDrag: (androidx.compose.ui.unit.Dp) -> Unit, onDr
 @Composable
 private fun ScrubPreview(pc: PlayerController, posMs: Long, durationMs: Long) {
     val track by pc.thumbTrack.collectAsState()
-    val cached by pc.cachedFrame.collectAsState()
-    val context = LocalContext.current
+    val frameVersion by pc.frameVersion.collectAsState()
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val frac = if (durationMs > 0) (posMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
         val w = 160.dp
@@ -403,38 +416,31 @@ private fun ScrubPreview(pc: PlayerController, posMs: Long, durationMs: Long) {
             Modifier.offset(x = x, y = y).width(w),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Box(Modifier.size(w, h).clip(RoundedCornerShape(6.dp)).background(Color.Black)) {
+            Box(
+                Modifier.size(w, h).clip(RoundedCornerShape(6.dp)).background(Color.Black),
+                contentAlignment = Alignment.Center,
+            ) {
                 val t = track
                 if (t != null) {
-                    val idx = t.indexFor(posMs)
-                    // Preload the neighbours so moving the finger shows them instantly.
-                    LaunchedEffect(idx) {
-                        val loader = SingletonImageLoader.get(context)
-                        for (d in listOf(1, -1, 2, -2, 3, 4)) {
-                            val i = idx + d
-                            if (i >= 0) loader.enqueue(ImageRequest.Builder(context).data(t.url(i)).build())
-                        }
-                    }
+                    // Preloaded IVS thumbnail (snapped to the nearest preloaded one).
                     AsyncImage(
-                        model = t.url(idx),
+                        model = t.url(t.indexFor(posMs)),
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize(),
                     )
                 } else {
-                    AndroidView(
-                        factory = { ctx -> TextureView(ctx).also { pc.attachPreview(it) } },
-                        modifier = Modifier.fillMaxSize(),
-                        onRelease = { pc.detachPreview(it) },
-                    )
-                    // Already-seen checkpoints show instantly from the cache.
-                    cached?.let { bmp ->
+                    // Exact checkpoint frame if ready, else the nearest one we have.
+                    val bmp = remember(frameVersion, posMs) { pc.frameFor(pc.checkpointFor(posMs)) }
+                    if (bmp != null) {
                         Image(
                             bmp.asImageBitmap(),
                             contentDescription = null,
                             contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize(),
                         )
+                    } else {
+                        CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = Color.White)
                     }
                 }
             }
@@ -509,58 +515,92 @@ private fun OverlayChat(chat: ChatSource, actions: Actions, onClose: () -> Unit)
             1 -> Color(0x55000000)
             else -> Color(0xAA000000)
         }
-        Column(
+        // Controls (move bar, BG, close, resize corner) appear on tap and fade after 3s idle.
+        var controls by remember { mutableStateOf(false) }
+        var touchedAt by remember { mutableLongStateOf(0L) }
+        fun touched() {
+            controls = true
+            touchedAt = System.currentTimeMillis()
+        }
+        LaunchedEffect(touchedAt) {
+            if (touchedAt > 0) {
+                delay(3_000)
+                controls = false
+            }
+        }
+        Box(
             Modifier
                 .offset(x = (maxW - ww) * fx, y = (maxH - hh) * fy)
                 .size(ww, hh)
                 .clip(RoundedCornerShape(10.dp))
                 .background(bgColor)
                 .onGloballyPositioned { sheet.excludeCoords = it }
+                // Any touch on the overlay reveals the controls (without stealing chat scrolling).
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                        touched()
+                    }
+                }
         ) {
-            // Header: drag to move.
-            Row(
-                Modifier.fillMaxWidth().height(28.dp).background(Color(0x66000000))
-                    .pointerInput(maxW, maxH) {
-                        detectDragGestures(onDragEnd = { store.overlayX = fx; store.overlayY = fy }) { change, drag ->
-                            change.consume()
-                            val freeW = (maxW - size.first).toPx().coerceAtLeast(1f)
-                            val freeH = (maxH - size.second).toPx().coerceAtLeast(1f)
-                            fx = (fx + drag.x / freeW).coerceIn(0f, 1f)
-                            fy = (fy + drag.y / freeH).coerceIn(0f, 1f)
-                        }
-                    },
-                verticalAlignment = Alignment.CenterVertically,
+            ChatView(messages, "", Modifier.fillMaxSize(), overlay = true, showStatus = false)
+            AnimatedVisibility(
+                visible = controls,
+                modifier = Modifier.align(Alignment.TopCenter),
+                enter = fadeIn(),
+                exit = fadeOut(),
             ) {
-                Text("⠿  Chat", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f).padding(start = 8.dp))
-                Text(
-                    "BG",
-                    color = Color.White.copy(alpha = if (bg == 0) 0.5f else 1f),
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.clickable { bg = (bg + 1) % 3; store.overlayBg = bg }
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                )
-                Icon(
-                    Icons.Filled.Close, contentDescription = "Close pop-out chat", tint = Color.White,
-                    modifier = Modifier.clickable(onClick = onClose).padding(4.dp).size(18.dp),
-                )
+                // Move bar.
+                Row(
+                    Modifier.fillMaxWidth().height(28.dp).background(Color(0x99000000))
+                        .pointerInput(maxW, maxH) {
+                            detectDragGestures(onDragEnd = { store.overlayX = fx; store.overlayY = fy }) { change, drag ->
+                                change.consume()
+                                touched()
+                                val freeW = (maxW - size.first).toPx().coerceAtLeast(1f)
+                                val freeH = (maxH - size.second).toPx().coerceAtLeast(1f)
+                                fx = (fx + drag.x / freeW).coerceIn(0f, 1f)
+                                fy = (fy + drag.y / freeH).coerceIn(0f, 1f)
+                            }
+                        },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("⠿  Move", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f).padding(start = 8.dp))
+                    Text(
+                        "BG",
+                        color = Color.White.copy(alpha = if (bg == 0) 0.5f else 1f),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.clickable { touched(); bg = (bg + 1) % 3; store.overlayBg = bg }
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                    )
+                    Icon(
+                        Icons.Filled.Close, contentDescription = "Close pop-out chat", tint = Color.White,
+                        modifier = Modifier.clickable(onClick = onClose).padding(4.dp).size(18.dp),
+                    )
+                }
             }
-            Box(Modifier.fillMaxWidth().weight(1f)) {
-                ChatView(messages, "", Modifier.fillMaxSize(), overlay = true, showStatus = false)
+            AnimatedVisibility(
+                visible = controls,
+                modifier = Modifier.align(Alignment.BottomEnd),
+                enter = fadeIn(),
+                exit = fadeOut(),
+            ) {
                 // Corner handle: drag to resize.
                 Box(
-                    Modifier.align(Alignment.BottomEnd).size(26.dp)
+                    Modifier.size(30.dp).background(Color(0x99000000), RoundedCornerShape(topStart = 8.dp))
                         .pointerInput(maxW, maxH) {
                             detectDragGestures(onDragEnd = { store.overlayW = w.value; store.overlayH = h.value }) { change, drag ->
                                 change.consume()
+                                touched()
                                 w = (w + drag.x.toDp()).coerceIn(140.dp, maxW)
                                 h = (h + drag.y.toDp()).coerceIn(100.dp, maxH)
                             }
                         },
-                    contentAlignment = Alignment.BottomEnd,
+                    contentAlignment = Alignment.Center,
                 ) {
-                    Text("◢", color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp, modifier = Modifier.padding(2.dp))
+                    Text("◢", color = Color.White, fontSize = 14.sp)
                 }
             }
         }
