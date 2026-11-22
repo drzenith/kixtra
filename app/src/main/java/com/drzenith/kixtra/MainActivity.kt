@@ -168,10 +168,7 @@ class MainActivity : ComponentActivity() {
                     val sheet = actions.sheet
                     Box(
                         Modifier.fillMaxSize()
-                            .onGloballyPositioned {
-                                sheet.parentCoords = it
-                                sheet.heightPx = it.size.height.toFloat().coerceAtLeast(1f)
-                            }
+                            .onGloballyPositioned { sheet.parentCoords = it }
                             .pointerInput(sheet) { detectSheetDrag(sheet) }
                     ) {
                         val bg = MaterialTheme.colorScheme.background
