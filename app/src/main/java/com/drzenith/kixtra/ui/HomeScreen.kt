@@ -30,7 +30,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.drzenith.kixtra.data.Channel
 import com.drzenith.kixtra.data.FollowedChannel
 import com.drzenith.kixtra.data.StreamItem
@@ -58,7 +61,12 @@ fun HomeScreen(state: Screen.Home, actions: Actions) {
 
     Column(Modifier.fillMaxSize()) {
         TopAppBar(
-            title = { Text(TABS[state.tab].label) },
+            title = {
+                Text(
+                    "Kixtra",
+                    style = TextStyle(brush = BrandGradient, fontWeight = FontWeight.Bold, fontSize = 22.sp),
+                )
+            },
             actions = {
                 if (state.tab == 0) {
                     IconButton(onClick = { refreshFollows(state, follows, scope) }) {

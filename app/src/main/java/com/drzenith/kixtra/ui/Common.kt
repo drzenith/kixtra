@@ -168,7 +168,7 @@ fun StreamCard(item: StreamItem, onClick: () -> Unit, onChannel: () -> Unit) {
                 Text(item.title, maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
                 Text(item.username, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp,
                     modifier = Modifier.clickable(onClick = onChannel))
-                item.category?.let { Text(it, color = KickGreen, fontSize = 12.sp) }
+                item.category?.let { Text(it, color = AccentCyan, fontSize = 12.sp) }
             }
         }
     }
@@ -188,7 +188,7 @@ fun VideoCard(video: Video, progressMs: Long, onClick: () -> Unit) {
                 if (progressMs > 0 && video.durationMs > 0) {
                     val frac = (progressMs.toFloat() / video.durationMs).coerceIn(0f, 1f)
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomStart) {
-                        Box(Modifier.fillMaxWidth(frac).height(3.dp).background(KickGreen))
+                        Box(Modifier.fillMaxWidth(frac).height(3.dp).background(BrandGradient))
                     }
                 }
             }
@@ -196,7 +196,7 @@ fun VideoCard(video: Video, progressMs: Long, onClick: () -> Unit) {
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
             Text(video.title, maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-            video.category?.let { Text(it, color = KickGreen, fontSize = 12.sp) }
+            video.category?.let { Text(it, color = AccentCyan, fontSize = 12.sp) }
             Text(
                 listOfNotNull(
                     if (video.views > 0) "${compact(video.views)} views" else null,
@@ -392,7 +392,7 @@ fun ClipCard(clip: Clip, onClick: () -> Unit, onChannel: () -> Unit) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp,
                     modifier = Modifier.clickable(onClick = onChannel),
                 )
-                clip.category?.let { Text(it, color = KickGreen, fontSize = 12.sp) }
+                clip.category?.let { Text(it, color = AccentCyan, fontSize = 12.sp) }
             }
         }
     }

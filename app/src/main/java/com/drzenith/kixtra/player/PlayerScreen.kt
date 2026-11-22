@@ -48,6 +48,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -60,6 +61,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.Player
+import androidx.media3.ui.DefaultTimeBar
 import androidx.media3.ui.PlayerView
 import com.drzenith.kixtra.chat.ChatSource
 import com.drzenith.kixtra.chat.ChatView
@@ -69,7 +71,8 @@ import com.drzenith.kixtra.chat.parseKickTime
 import com.drzenith.kixtra.ui.Actions
 import com.drzenith.kixtra.ui.Avatar
 import com.drzenith.kixtra.ui.Badge
-import com.drzenith.kixtra.ui.KickGreen
+import com.drzenith.kixtra.ui.AccentCyan
+import com.drzenith.kixtra.ui.AccentViolet
 import com.drzenith.kixtra.ui.LiveRed
 import com.drzenith.kixtra.ui.compact
 import kotlinx.coroutines.delay
@@ -276,6 +279,12 @@ private fun VideoBox(
                 setFullscreenButtonClickListener { isFull -> fs(isFull) }
                 // Media3's settings cog duplicates our speed/quality menus (and caps speed at 2x).
                 findViewById<View>(androidx.media3.ui.R.id.exo_settings)?.visibility = View.GONE
+                // Brand-colored seek bar.
+                findViewById<DefaultTimeBar>(androidx.media3.ui.R.id.exo_progress)?.apply {
+                    setPlayedColor(AccentViolet.toArgb())
+                    setScrubberColor(AccentCyan.toArgb())
+                    setBufferedColor(0x66FFFFFF)
+                }
                 setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { v -> ctl(v == View.VISIBLE) })
             }
         },
@@ -310,8 +319,8 @@ private fun InfoBar(actions: Actions) {
                     Spacer(Modifier.width(8.dp))
                     when {
                         p is Playable.Live -> Badge("LIVE • ${compact(ch.live?.viewers ?: 0)}", LiveRed)
-                        p is Playable.Vod && p.dvr -> Badge("FROM START", KickGreen, Color.Black)
-                        p is Playable.Vod && p.video.isLive -> Badge("LIVE VOD", KickGreen, Color.Black)
+                        p is Playable.Vod && p.dvr -> Badge("FROM START", AccentCyan, Color(0xFF032B33))
+                        p is Playable.Vod && p.video.isLive -> Badge("LIVE VOD", AccentCyan, Color(0xFF032B33))
                         p is Playable.ClipItem -> Badge("CLIP", Color(0xFF3A3D41))
                     }
                 }

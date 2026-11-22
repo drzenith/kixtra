@@ -159,7 +159,7 @@ private fun Header(ch: Channel, followed: Boolean, actions: Actions) {
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(ch.username, fontWeight = FontWeight.Bold, fontSize = 20.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if (ch.verified) Text("  ✓", color = KickGreen, fontWeight = FontWeight.Bold)
+                    if (ch.verified) Text("  ✓", color = AccentCyan, fontWeight = FontWeight.Bold)
                 }
                 if (ch.followers > 0) {
                     Text("${compact(ch.followers)} followers", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)

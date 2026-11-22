@@ -91,7 +91,7 @@ fun SettingsScreen(actions: Actions) {
 private fun Section(title: String) {
     Text(
         title,
-        color = KickGreen,
+        color = AccentViolet,
         fontWeight = FontWeight.Bold,
         fontSize = 13.sp,
         modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 4.dp),

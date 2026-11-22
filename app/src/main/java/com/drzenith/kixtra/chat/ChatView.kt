@@ -51,7 +51,7 @@ private fun badgePrefix(badges: List<String>): String = buildString {
 }
 
 private fun userColor(hex: String?): Color =
-    runCatching { Color(android.graphics.Color.parseColor(hex)) }.getOrDefault(Color(0xFF53FC18))
+    runCatching { Color(android.graphics.Color.parseColor(hex)) }.getOrDefault(Color(0xFFA78BFA))
 
 @Composable
 private fun ChatLine(m: ChatMsg) {
