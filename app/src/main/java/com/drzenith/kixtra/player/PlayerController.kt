@@ -111,6 +111,9 @@ class PlayerController(private val context: Context, private val store: Store) {
     val speed = MutableStateFlow(1f)
     val isPlaying = MutableStateFlow(false)
 
+    /** Display aspect ratio of the current video (width / height). */
+    val videoAspect = MutableStateFlow(16f / 9f)
+
     /** Fires whenever a frame is first drawn on a (new) video surface; used for smooth hand-offs. */
     val firstFrame = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
@@ -153,6 +156,12 @@ class PlayerController(private val context: Context, private val store: Store) {
 
             override fun onRenderedFirstFrame() {
                 firstFrame.tryEmit(Unit)
+            }
+
+            override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                if (videoSize.width > 0 && videoSize.height > 0) {
+                    videoAspect.value = videoSize.width * videoSize.pixelWidthHeightRatio / videoSize.height
+                }
             }
 
             override fun onIsPlayingChanged(playing: Boolean) {

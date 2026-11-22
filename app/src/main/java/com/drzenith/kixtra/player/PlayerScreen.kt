@@ -339,10 +339,15 @@ fun PlayerScreen(actions: Actions) {
 
     // Side chat width (fullscreen + wide layouts), adjustable by dragging the divider.
     var chatWidth by remember { mutableStateOf(actions.store.chatWidthDp.dp) }
-    val maxChatWidth = (cfg.screenWidthDp * 0.6f).dp
+    // Width actually shown (can be larger than chatWidth when it fills spare space); drags start here.
+    val shownChatWidth = remember { floatArrayOf(0f) }
+    val maxChatWidth = (cfg.screenWidthDp * 0.7f).dp
     val sideChat: @Composable () -> Unit = {
         ChatResizeHandle(
-            onDrag = { deltaDp -> chatWidth = (chatWidth - deltaDp).coerceIn(150.dp, maxChatWidth.coerceAtLeast(150.dp)) },
+            onDrag = { deltaDp ->
+                val from = maxOf(chatWidth, shownChatWidth[0].dp)
+                chatWidth = (from - deltaDp).coerceIn(150.dp, maxChatWidth.coerceAtLeast(150.dp))
+            },
             onDragEnd = { actions.store.chatWidthDp = chatWidth.value },
         )
     }
@@ -351,28 +356,43 @@ fun PlayerScreen(actions: Actions) {
     val chatStatus = chat?.status?.collectAsState()
     val zone = Modifier.onGloballyPositioned { actions.sheet.zoneCoords = it }
 
+    val aspect by pc.videoAspect.collectAsState()
+
     if (fullscreen) {
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+        // Chat takes any width the video can't use (no black bars), or the width you dragged it
+        // to if that's wider.
+        val fill = maxWidth - maxHeight * aspect
+        val sideWidth = maxOf(chatWidth, fill).coerceAtMost(maxWidth * 0.7f)
+        shownChatWidth[0] = sideWidth.value
         Row(Modifier.fillMaxSize().background(Color.Black)) {
             video(Modifier.weight(1f).fillMaxHeight())
             if (chat != null && chatInLandscape) {
-                Box(Modifier.width(chatWidth).fillMaxHeight()) {
+                Box(Modifier.width(sideWidth).fillMaxHeight()) {
                     ChatView(chatMessages?.value ?: emptyList(), chatStatus?.value ?: "", Modifier.fillMaxSize())
                     Box(Modifier.align(Alignment.CenterStart)) { sideChat() }
                 }
             }
         }
+        }
     } else if (wide) {
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+        // Same idea; the title bar under the video takes roughly 64dp of height.
+        val fill = maxWidth - (maxHeight - 64.dp) * aspect
+        val sideWidth = maxOf(chatWidth, fill).coerceAtMost(maxWidth * 0.7f)
+        shownChatWidth[0] = sideWidth.value
         Row(Modifier.fillMaxSize()) {
             Column(Modifier.weight(1f).fillMaxHeight().then(zone)) {
                 video(Modifier.fillMaxWidth().weight(1f))
                 Box(fadeWithSheet) { InfoBar(actions) }
             }
             if (chat != null) {
-                Box(Modifier.width(chatWidth).fillMaxHeight().then(fadeWithSheet)) {
+                Box(Modifier.width(sideWidth).fillMaxHeight().then(fadeWithSheet)) {
                     ChatView(chatMessages?.value ?: emptyList(), chatStatus?.value ?: "", Modifier.fillMaxSize())
                     Box(Modifier.align(Alignment.CenterStart)) { sideChat() }
                 }
             }
+        }
         }
     } else {
         Column(Modifier.fillMaxSize()) {
