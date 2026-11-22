@@ -143,11 +143,41 @@ class PlayerController(private val context: Context, private val store: Store) {
     private fun targetDurationMs(): Long =
         ((player.currentManifest as? HlsManifest)?.mediaPlaylist?.targetDurationUs ?: 0L) / 1000
 
+    // How often the live VOD actually grows (Kick adds video in batches, e.g. every ~30s).
+    private var growthItem: Playable? = null
+    private var lastGrowthDuration = 0L
+    private var lastGrowthAt = 0L
+    private val growthGaps = ArrayDeque<Long>()
+
+    private fun trackGrowth(p: Playable) {
+        if (growthItem != p) {
+            growthItem = p
+            lastGrowthDuration = 0L
+            lastGrowthAt = 0L
+            growthGaps.clear()
+        }
+        val d = player.duration
+        if (d > lastGrowthDuration + 500) {
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (lastGrowthAt > 0 && lastGrowthDuration > 0) {
+                growthGaps.addLast(now - lastGrowthAt)
+                if (growthGaps.size > 5) growthGaps.removeFirst()
+            }
+            lastGrowthAt = now
+            lastGrowthDuration = d
+        }
+    }
+
+    /** Longest recent gap between the video growing (falls back to the segment length). */
+    private fun growthCadenceMs(): Long = growthGaps.maxOrNull() ?: targetDurationMs()
+
     /**
-     * How far behind the newest part "live" sits: one of Kick's segments plus a little slack (the
-     * player's default is three segments, ~1 minute). As close as a manual skip gets you.
+     * How far behind the newest part "live" sits: one growth step plus a little slack, so playback
+     * never reaches the end before the next batch of video arrives (the player's own default is
+     * three segments, ~1 minute).
      */
-    private fun liveEdgeOffsetMs(): Long = (targetDurationMs() + 2_000).coerceIn(4_000, 20_000)
+    private fun liveEdgeOffsetMs(): Long =
+        maxOf(targetDurationMs() + 2_000, growthCadenceMs() + 3_000).coerceIn(4_000, 60_000)
 
     val current = MutableStateFlow<Playable?>(null)
     val error = MutableStateFlow<String?>(null)
@@ -278,10 +308,11 @@ class PlayerController(private val context: Context, private val store: Store) {
                     atLive.value = false
                     continue
                 }
+                trackGrowth(p)
                 val remaining = player.duration - player.currentPosition
                 val edge = liveEdgeOffsetMs()
-                // The newest part grows in segment-sized steps, so "at live" allows one segment of slack.
-                atLive.value = remaining <= edge + targetDurationMs() + 5_000
+                // The newest part grows in steps, so "at live" allows one step of slack.
+                atLive.value = remaining <= edge + growthCadenceMs() + 5_000
                 if (player.playbackParameters.speed > 1f && remaining <= edge) {
                     autoSpeed = true
                     player.setPlaybackSpeed(1f)
