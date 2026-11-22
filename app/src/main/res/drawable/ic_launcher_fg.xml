@@ -1,11 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Kixtra: a fast-forward mark (speed-up VODs, catch up to live). -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Blocky "K" with a play notch -->
     <path
-        android:fillColor="#FF53FC18"
-        android:pathData="M34,30h12v18l14,-18h14l-17,22l17,26h-14l-14,-21v21h-12z" />
+        android:fillColor="#FFC9C3FF"
+        android:strokeColor="#FFC9C3FF"
+        android:strokeWidth="5"
+        android:strokeLineJoin="round"
+        android:pathData="M33,37 L53,54 L33,71 Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="5"
+        android:strokeLineJoin="round"
+        android:pathData="M50,37 L75,54 L50,71 Z" />
 </vector>
