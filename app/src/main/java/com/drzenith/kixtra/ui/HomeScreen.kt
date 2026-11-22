@@ -26,6 +26,10 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -89,7 +93,7 @@ fun HomeScreen(state: Screen.Home, actions: Actions) {
         )
         Column(Modifier.weight(1f).fillMaxWidth()) {
             when (state.tab) {
-                0 -> FollowingTab(state, follows, actions)
+                0 -> FollowingTab(state, follows, actions, scope)
                 1 -> LiveTab(state, actions, scope)
                 2 -> CategoriesTab(state, actions, scope)
                 else -> ClipsTab(state, actions, scope)
@@ -202,14 +206,28 @@ private fun thumbFor(state: Screen.Home, slug: String, fallback: String?): Strin
 fun LazyGridScope.full(key: String? = null, content: @Composable () -> Unit) =
     item(key = key, span = { GridItemSpan(maxLineSpan) }) { content() }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun FollowingTab(state: Screen.Home, follows: List<FollowedChannel>, actions: Actions) {
+private fun FollowingTab(state: Screen.Home, follows: List<FollowedChannel>, actions: Actions, scope: CoroutineScope) {
     if (follows.isEmpty()) {
         EmptyBox("No follows yet. Open a channel and tap Follow. Follows are saved on this device.")
         return
     }
     val (live, offline) = splitFollows(state, follows)
 
+    // Pull down to refresh. Only show the spinner for refreshes you started by pulling,
+    // not the automatic background ones.
+    var pulled by remember { mutableStateOf(false) }
+    LaunchedEffect(state.follows.loading) { if (!state.follows.loading) pulled = false }
+
+    PullToRefreshBox(
+        isRefreshing = pulled && state.follows.loading,
+        onRefresh = {
+            pulled = true
+            refreshFollows(state, follows, actions.store, scope)
+        },
+        modifier = Modifier.fillMaxSize(),
+    ) {
     LazyVerticalGrid(GridCells.Adaptive(CARD_MIN_WIDTH), Modifier.fillMaxSize(), state = state.followsList) {
         if (state.follows.data == null && state.follows.loading) full { LoadingBox() }
         if (live.isNotEmpty()) full("h_live") { SectionTitle("Live now") }
@@ -229,6 +247,7 @@ private fun FollowingTab(state: Screen.Home, follows: List<FollowedChannel>, act
             ).joinToString(" • ").ifBlank { null }
             ChannelRow(ch.avatar, ch.username, subtitle, false) { actions.openChannel(ch.slug) }
         }
+    }
     }
 }
 

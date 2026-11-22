@@ -305,6 +305,16 @@ fun PlayerScreen(actions: Actions) {
         }
     }
 
+    // Side chat width (fullscreen + wide layouts), adjustable by dragging the divider.
+    var chatWidth by remember { mutableStateOf(actions.store.chatWidthDp.dp) }
+    val maxChatWidth = (cfg.screenWidthDp * 0.6f).dp
+    val sideChat: @Composable () -> Unit = {
+        ChatResizeHandle(
+            onDrag = { deltaDp -> chatWidth = (chatWidth - deltaDp).coerceIn(150.dp, maxChatWidth.coerceAtLeast(150.dp)) },
+            onDragEnd = { actions.store.chatWidthDp = chatWidth.value },
+        )
+    }
+
     val chatMessages = chat?.messages?.collectAsState()
     val chatStatus = chat?.status?.collectAsState()
     val zone = Modifier.onGloballyPositioned { actions.sheet.zoneCoords = it }
@@ -313,7 +323,8 @@ fun PlayerScreen(actions: Actions) {
         Row(Modifier.fillMaxSize().background(Color.Black)) {
             video(Modifier.weight(1f).fillMaxHeight())
             if (chat != null && chatInLandscape) {
-                ChatView(chatMessages?.value ?: emptyList(), chatStatus?.value ?: "", Modifier.width(300.dp).fillMaxHeight())
+                sideChat()
+                ChatView(chatMessages?.value ?: emptyList(), chatStatus?.value ?: "", Modifier.width(chatWidth).fillMaxHeight())
             }
         }
     } else if (wide) {
@@ -323,7 +334,8 @@ fun PlayerScreen(actions: Actions) {
                 Box(fadeWithSheet) { InfoBar(actions) }
             }
             if (chat != null) {
-                ChatView(chatMessages?.value ?: emptyList(), chatStatus?.value ?: "", Modifier.width(340.dp).fillMaxHeight().then(fadeWithSheet))
+                Box(fadeWithSheet) { sideChat() }
+                ChatView(chatMessages?.value ?: emptyList(), chatStatus?.value ?: "", Modifier.width(chatWidth).fillMaxHeight().then(fadeWithSheet))
             }
         }
     } else {
@@ -336,6 +348,28 @@ fun PlayerScreen(actions: Actions) {
                 ChatView(chatMessages?.value ?: emptyList(), chatStatus?.value ?: "", Modifier.fillMaxWidth().weight(1f).then(fadeWithSheet))
             }
         }
+    }
+}
+
+/** Vertical divider between video and side chat; drag left/right to resize the chat. */
+@Composable
+private fun ChatResizeHandle(onDrag: (androidx.compose.ui.unit.Dp) -> Unit, onDragEnd: () -> Unit) {
+    val density = LocalDensity.current
+    Box(
+        Modifier.fillMaxHeight().width(14.dp).background(MaterialTheme.colorScheme.surfaceContainer)
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(onDragEnd = onDragEnd, onDragCancel = onDragEnd) { change, amount ->
+                    change.consume()
+                    onDrag(with(density) { amount.toDp() })
+                }
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier.width(4.dp).fillMaxHeight(0.12f)
+                .clip(RoundedCornerShape(2.dp))
+                .background(MaterialTheme.colorScheme.outline)
+        )
     }
 }
 

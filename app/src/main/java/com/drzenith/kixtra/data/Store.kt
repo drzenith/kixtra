@@ -49,6 +49,11 @@ class Store(context: Context) {
         get() = prefs.getBoolean("hide_mature", false)
         set(v) = prefs.edit { putBoolean("hide_mature", v) }
 
+    /** Width of the side chat panel (landscape / wide windows), in dp. */
+    var chatWidthDp: Float
+        get() = prefs.getFloat("chat_width", 240f)
+        set(v) = prefs.edit { putFloat("chat_width", v) }
+
     var askedNotifications: Boolean
         get() = prefs.getBoolean("asked_notif", false)
         set(v) = prefs.edit { putBoolean("asked_notif", v) }
