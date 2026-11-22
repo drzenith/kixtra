@@ -12,6 +12,12 @@ import android.os.Build
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.LayoutInflater
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import coil3.SingletonImageLoader
+import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
 import android.widget.ImageButton
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.height
@@ -270,7 +276,8 @@ fun PlayerScreen(actions: Actions) {
     val onScrub: (Long?) -> Unit = { pos ->
         if (seekable) {
             scrubPos = pos
-            if (pos != null) pc.previewScrub(pos)
+            // Thumbnail images when the VOD has them; otherwise the video-based preview.
+            if (pos != null && pc.thumbTrack.value == null) pc.previewScrub(pos)
         }
     }
 
@@ -383,6 +390,9 @@ private fun ChatResizeHandle(onDrag: (androidx.compose.ui.unit.Dp) -> Unit, onDr
 /** Small frame preview + timestamp that follows the scrub position along the seek bar. */
 @Composable
 private fun ScrubPreview(pc: PlayerController, posMs: Long, durationMs: Long) {
+    val track by pc.thumbTrack.collectAsState()
+    val cached by pc.cachedFrame.collectAsState()
+    val context = LocalContext.current
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val frac = if (durationMs > 0) (posMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
         val w = 160.dp
@@ -393,11 +403,41 @@ private fun ScrubPreview(pc: PlayerController, posMs: Long, durationMs: Long) {
             Modifier.offset(x = x, y = y).width(w),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            AndroidView(
-                factory = { ctx -> TextureView(ctx).also { pc.attachPreview(it) } },
-                modifier = Modifier.size(w, h).clip(RoundedCornerShape(6.dp)).background(Color.Black),
-                onRelease = { pc.detachPreview(it) },
-            )
+            Box(Modifier.size(w, h).clip(RoundedCornerShape(6.dp)).background(Color.Black)) {
+                val t = track
+                if (t != null) {
+                    val idx = t.indexFor(posMs)
+                    // Preload the neighbours so moving the finger shows them instantly.
+                    LaunchedEffect(idx) {
+                        val loader = SingletonImageLoader.get(context)
+                        for (d in listOf(1, -1, 2, -2, 3, 4)) {
+                            val i = idx + d
+                            if (i >= 0) loader.enqueue(ImageRequest.Builder(context).data(t.url(i)).build())
+                        }
+                    }
+                    AsyncImage(
+                        model = t.url(idx),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else {
+                    AndroidView(
+                        factory = { ctx -> TextureView(ctx).also { pc.attachPreview(it) } },
+                        modifier = Modifier.fillMaxSize(),
+                        onRelease = { pc.detachPreview(it) },
+                    )
+                    // Already-seen checkpoints show instantly from the cache.
+                    cached?.let { bmp ->
+                        Image(
+                            bmp.asImageBitmap(),
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                }
+            }
             Text(
                 hms(posMs),
                 color = Color.White,
@@ -434,7 +474,7 @@ private fun barIcon(ctx: Context, res: Int, label: String): ImageButton = ImageB
     setImageResource(res)
     contentDescription = label
     scaleType = android.widget.ImageView.ScaleType.CENTER
-    layoutParams = LinearLayout.LayoutParams((44 * density).toInt(), (48 * density).toInt())
+    layoutParams = LinearLayout.LayoutParams((38 * density).toInt(), (48 * density).toInt())
     val tv = TypedValue()
     if (ctx.theme.resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, tv, true)) {
         setBackgroundResource(tv.resourceId)
