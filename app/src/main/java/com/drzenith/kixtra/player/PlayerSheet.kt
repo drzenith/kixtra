@@ -38,6 +38,8 @@ class PlayerSheet {
 
     /** The full player layer, the drag zone (video + title bar) and the video itself. */
     var parentCoords: LayoutCoordinates? = null
+    /** An area inside the zone where drags belong to something else (the pop-out chat). */
+    var excludeCoords: LayoutCoordinates? = null
     var zoneCoords: LayoutCoordinates? = null
     var videoCoords: LayoutCoordinates? = null
 
@@ -54,6 +56,14 @@ class PlayerSheet {
         private set
 
     val fraction: Float get() = (offset.value / geometry.travel).coerceIn(0f, 1f)
+
+    /**
+     * True while the video is being handed between the full player and the mini player: both are
+     * shown (mini underneath) until the new view has drawn a frame, so nothing flashes.
+     */
+    var handoff by mutableStateOf(false)
+        private set
+    var awaitFirstFrame: suspend () -> Unit = {}
 
     /** True while the player is growing out of the mini player (the UI skips its slide-in). */
     var fromMini by mutableStateOf(false)
@@ -84,6 +94,10 @@ class PlayerSheet {
         val p = parentCoords ?: return false
         val z = zoneCoords ?: return false
         if (!p.isAttached || !z.isAttached) return false
+        val ex = excludeCoords
+        if (ex != null && ex.isAttached &&
+            runCatching { p.localBoundingBoxOf(ex, clipBounds = false).contains(pos) }.getOrDefault(false)
+        ) return false
         return runCatching { p.localBoundingBoxOf(z, clipBounds = false).contains(pos) }.getOrDefault(false)
     }
 
@@ -139,8 +153,13 @@ class PlayerSheet {
             return
         }
         fromMini = true
+        handoff = true
         s.launch(start = CoroutineStart.UNDISPATCHED) { offset.snapTo(g.travel) }
         show()
+        s.launch {
+            awaitFirstFrame()
+            handoff = false
+        }
         s.launch {
             offset.animateTo(0f, tween(durationMillis = 280, easing = FastOutSlowInEasing))
             fromMini = false
@@ -149,7 +168,11 @@ class PlayerSheet {
 
     private suspend fun collapseAnimated() {
         offset.animateTo(geometry.travel, tween(durationMillis = 260, easing = FastOutSlowInEasing))
+        // Mount the mini player underneath, let it draw, then remove the full player on top.
+        handoff = true
+        awaitFirstFrame()
         onCollapsed()
+        handoff = false
     }
 }
 

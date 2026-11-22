@@ -54,6 +54,24 @@ class Store(context: Context) {
         get() = prefs.getFloat("chat_width", 240f)
         set(v) = prefs.edit { putFloat("chat_width", v) }
 
+    // ---- Pop-out chat overlay (position as fractions of the video, size in dp) ----
+    var overlayX: Float
+        get() = prefs.getFloat("ov_x", 0.02f)
+        set(v) = prefs.edit { putFloat("ov_x", v) }
+    var overlayY: Float
+        get() = prefs.getFloat("ov_y", 0.15f)
+        set(v) = prefs.edit { putFloat("ov_y", v) }
+    var overlayW: Float
+        get() = prefs.getFloat("ov_w", 260f)
+        set(v) = prefs.edit { putFloat("ov_w", v) }
+    var overlayH: Float
+        get() = prefs.getFloat("ov_h", 220f)
+        set(v) = prefs.edit { putFloat("ov_h", v) }
+    /** 0 = no background, 1 = light, 2 = dark. */
+    var overlayBg: Int
+        get() = prefs.getInt("ov_bg", 1)
+        set(v) = prefs.edit { putInt("ov_bg", v) }
+
     var askedNotifications: Boolean
         get() = prefs.getBoolean("asked_notif", false)
         set(v) = prefs.edit { putBoolean("asked_notif", v) }

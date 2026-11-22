@@ -149,7 +149,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 AnimatedVisibility(
-                    visible = hasPlayer && !expanded,
+                    visible = hasPlayer && (!expanded || actions.sheet.handoff),
                     modifier = Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = miniBottom),
                     enter = EnterTransition.None,
                     exit = ExitTransition.None,

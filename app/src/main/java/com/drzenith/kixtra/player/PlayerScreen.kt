@@ -11,6 +11,12 @@ import android.graphics.Typeface
 import android.os.Build
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.LayoutInflater
+import android.widget.ImageButton
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.layout.height
+import androidx.compose.runtime.mutableIntStateOf
+import com.drzenith.kixtra.R
 import android.view.TextureView
 import android.view.View
 import android.view.ViewGroup
@@ -128,9 +134,20 @@ class BarSpec(
     val onQuality: (View) -> Unit,
     val onSpeed: (View) -> Unit,
     val onRefresh: () -> Unit,
+    /** null = hidden; otherwise whether the side chat / pop-out chat is on. */
+    val sideChat: Boolean? = null,
+    val overlayChat: Boolean? = null,
+    val onSideChat: () -> Unit = {},
+    val onOverlayChat: () -> Unit = {},
 )
 
-private class BarButtons(val quality: TextView, val speed: TextView, val refresh: TextView)
+private class BarButtons(
+    val quality: TextView,
+    val speed: TextView,
+    val refresh: TextView,
+    val sideChat: ImageButton,
+    val overlayChat: ImageButton,
+)
 
 /** Native popup menu anchored to a control-bar button. */
 private fun showMenu(anchor: View, options: List<Pair<String, () -> Unit>>, selected: String) {
@@ -228,22 +245,9 @@ fun PlayerScreen(actions: Actions) {
         }
     }
 
-    // Chat: live chat for live streams, synced replay for VODs.
-    val chat: ChatSource? = remember(current, actions.store.chatEnabled) {
-        val p = current
-        if (!actions.store.chatEnabled || p == null || p.channel.id == 0L) null
-        else when (p) {
-            is Playable.Live -> p.channel.chatroomId?.let { LiveChat(p.channel.id, it, scope) }
-            is Playable.Vod -> parseKickTime(p.video.startTime)?.let { start ->
-                ReplayChat(p.channel.id, start, scope) { pc.player.currentPosition }
-            }
-            is Playable.ClipItem -> null
-        }
-    }
-    DisposableEffect(chat) {
-        chat?.start()
-        onDispose { chat?.stop() }
-    }
+    // Chat belongs to the current video (kept across minimize/expand); see PlayerController.chat.
+    val chat by pc.chat.collectAsState()
+    var overlayOn by remember { mutableStateOf(false) }
 
     // Control-bar buttons.
     val seekable = current?.seekable == true
@@ -258,6 +262,10 @@ fun PlayerScreen(actions: Actions) {
         onQuality = { v -> showMenu(v, qOptions, selectedQ) },
         onSpeed = { v -> showMenu(v, SPEEDS.map { s -> speedLabel(s) to { pc.setSpeed(s) } }, speedLabel(speed)) },
         onRefresh = { pc.reload(keepPosition = true) },
+        sideChat = if (fullscreen && chat != null) chatInLandscape else null,
+        overlayChat = if (fullscreen && chat != null) overlayOn else null,
+        onSideChat = { chatInLandscape = !chatInLandscape },
+        onOverlayChat = { overlayOn = !overlayOn },
     )
     val onScrub: (Long?) -> Unit = { pos ->
         if (seekable) {
@@ -294,13 +302,12 @@ fun PlayerScreen(actions: Actions) {
                 )
             }
             scrubPos?.let { pos -> ScrubPreview(pc, pos, pc.player.duration) }
+            val c = chat
+            if (fullscreen && overlayOn && c != null) {
+                OverlayChat(c, actions) { overlayOn = false }
+            }
             if (controlsVisible) {
                 Box(Modifier.align(Alignment.TopStart).padding(8.dp)) { ContextAction(actions) }
-                if (fullscreen && chat != null) {
-                    Box(Modifier.align(Alignment.TopEnd).padding(8.dp)) {
-                        Pill(if (chatInLandscape) "Hide chat" else "Chat") { chatInLandscape = !chatInLandscape }
-                    }
-                }
             }
         }
     }
@@ -422,6 +429,104 @@ private fun barButton(ctx: Context, text: String, sizeSp: Float = 13f): TextView
     isFocusable = true
 }
 
+private fun barIcon(ctx: Context, res: Int, label: String): ImageButton = ImageButton(ctx).apply {
+    val density = resources.displayMetrics.density
+    setImageResource(res)
+    contentDescription = label
+    scaleType = android.widget.ImageView.ScaleType.CENTER
+    layoutParams = LinearLayout.LayoutParams((44 * density).toInt(), (48 * density).toInt())
+    val tv = TypedValue()
+    if (ctx.theme.resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, tv, true)) {
+        setBackgroundResource(tv.resourceId)
+    } else {
+        setBackgroundColor(android.graphics.Color.TRANSPARENT)
+    }
+}
+
+/**
+ * Pop-out chat floating over the video: drag the top bar to move it, drag the corner to resize,
+ * tap "BG" to cycle the background (none / light / dark). Position and size are remembered.
+ */
+@Composable
+private fun OverlayChat(chat: ChatSource, actions: Actions, onClose: () -> Unit) {
+    val store = actions.store
+    val sheet = actions.sheet
+    val messages by chat.messages.collectAsState()
+    DisposableEffect(Unit) { onDispose { sheet.excludeCoords = null } }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val maxW = maxWidth
+        val maxH = maxHeight
+        var w by remember { mutableStateOf(store.overlayW.dp) }
+        var h by remember { mutableStateOf(store.overlayH.dp) }
+        var fx by remember { mutableFloatStateOf(store.overlayX) }
+        var fy by remember { mutableFloatStateOf(store.overlayY) }
+        var bg by remember { mutableIntStateOf(store.overlayBg) }
+        val ww = w.coerceIn(140.dp, maxW)
+        val hh = h.coerceIn(100.dp, maxH)
+        val size by rememberUpdatedState(Pair(ww, hh))
+        val bgColor = when (bg) {
+            0 -> Color.Transparent
+            1 -> Color(0x55000000)
+            else -> Color(0xAA000000)
+        }
+        Column(
+            Modifier
+                .offset(x = (maxW - ww) * fx, y = (maxH - hh) * fy)
+                .size(ww, hh)
+                .clip(RoundedCornerShape(10.dp))
+                .background(bgColor)
+                .onGloballyPositioned { sheet.excludeCoords = it }
+        ) {
+            // Header: drag to move.
+            Row(
+                Modifier.fillMaxWidth().height(28.dp).background(Color(0x66000000))
+                    .pointerInput(maxW, maxH) {
+                        detectDragGestures(onDragEnd = { store.overlayX = fx; store.overlayY = fy }) { change, drag ->
+                            change.consume()
+                            val freeW = (maxW - size.first).toPx().coerceAtLeast(1f)
+                            val freeH = (maxH - size.second).toPx().coerceAtLeast(1f)
+                            fx = (fx + drag.x / freeW).coerceIn(0f, 1f)
+                            fy = (fy + drag.y / freeH).coerceIn(0f, 1f)
+                        }
+                    },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("⠿  Chat", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f).padding(start = 8.dp))
+                Text(
+                    "BG",
+                    color = Color.White.copy(alpha = if (bg == 0) 0.5f else 1f),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.clickable { bg = (bg + 1) % 3; store.overlayBg = bg }
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                )
+                Icon(
+                    Icons.Filled.Close, contentDescription = "Close pop-out chat", tint = Color.White,
+                    modifier = Modifier.clickable(onClick = onClose).padding(4.dp).size(18.dp),
+                )
+            }
+            Box(Modifier.fillMaxWidth().weight(1f)) {
+                ChatView(messages, "", Modifier.fillMaxSize(), overlay = true, showStatus = false)
+                // Corner handle: drag to resize.
+                Box(
+                    Modifier.align(Alignment.BottomEnd).size(26.dp)
+                        .pointerInput(maxW, maxH) {
+                            detectDragGestures(onDragEnd = { store.overlayW = w.value; store.overlayH = h.value }) { change, drag ->
+                                change.consume()
+                                w = (w + drag.x.toDp()).coerceIn(140.dp, maxW)
+                                h = (h + drag.y.toDp()).coerceIn(100.dp, maxH)
+                            }
+                        },
+                    contentAlignment = Alignment.BottomEnd,
+                ) {
+                    Text("◢", color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp, modifier = Modifier.padding(2.dp))
+                }
+            }
+        }
+    }
+}
+
 @Composable
 internal fun VideoBox(
     player: Player,
@@ -432,6 +537,7 @@ internal fun VideoBox(
     onControls: (Boolean) -> Unit,
     bar: BarSpec? = null,
     onScrub: ((Long?) -> Unit)? = null,
+    textureView: Boolean = true,
 ) {
     val fs by rememberUpdatedState(onFullscreen)
     val ctl by rememberUpdatedState(onControls)
@@ -441,7 +547,13 @@ internal fun VideoBox(
     AndroidView(
         modifier = modifier,
         factory = { ctx ->
-            PlayerView(ctx).apply {
+            // TextureView-backed for the animated full/mini players; plain SurfaceView for PiP.
+            val view = if (textureView) {
+                LayoutInflater.from(ctx).inflate(R.layout.player_view_texture, null) as PlayerView
+            } else {
+                PlayerView(ctx)
+            }
+            view.apply {
                 this.player = player
                 keepScreenOn = true
                 setShowNextButton(false)
@@ -476,13 +588,19 @@ internal fun VideoBox(
                         val q = barButton(ctx, "Auto")
                         val s = barButton(ctx, "1x")
                         val r = barButton(ctx, "↻", sizeSp = 18f)
+                        val sc = barIcon(ctx, R.drawable.ic_chat, "Side chat")
+                        val oc = barIcon(ctx, R.drawable.ic_chat_overlay, "Pop-out chat")
                         q.setOnClickListener { v -> barRef.value?.onQuality?.invoke(v) }
                         s.setOnClickListener { v -> barRef.value?.onSpeed?.invoke(v) }
                         r.setOnClickListener { barRef.value?.onRefresh?.invoke() }
+                        sc.setOnClickListener { barRef.value?.onSideChat?.invoke() }
+                        oc.setOnClickListener { barRef.value?.onOverlayChat?.invoke() }
+                        basic.addView(oc, 0)
+                        basic.addView(sc, 0)
                         basic.addView(r, 0)
                         basic.addView(s, 0)
                         basic.addView(q, 0)
-                        tag = BarButtons(q, s, r)
+                        tag = BarButtons(q, s, r, sc, oc)
                     }
                 }
                 setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { v -> ctl(v == View.VISIBLE) })
@@ -501,6 +619,10 @@ internal fun VideoBox(
                 } else {
                     b.speed.visibility = View.GONE
                 }
+                b.sideChat.visibility = if (spec.sideChat == null) View.GONE else View.VISIBLE
+                b.sideChat.alpha = if (spec.sideChat == true) 1f else 0.55f
+                b.overlayChat.visibility = if (spec.overlayChat == null) View.GONE else View.VISIBLE
+                b.overlayChat.alpha = if (spec.overlayChat == true) 1f else 0.55f
             }
         },
         onRelease = { it.player = null },
@@ -575,7 +697,10 @@ private fun Pill(label: String, onClick: () -> Unit) {
 /** Video only, for picture-in-picture. */
 @Composable
 fun PipVideo(actions: Actions) {
-    VideoBox(actions.player.player, Modifier.fillMaxSize(), useController = false, fullscreen = true, onFullscreen = {}, onControls = {})
+    VideoBox(
+        actions.player.player, Modifier.fillMaxSize(), useController = false, fullscreen = true,
+        onFullscreen = {}, onControls = {}, textureView = false,
+    )
 }
 
 /**

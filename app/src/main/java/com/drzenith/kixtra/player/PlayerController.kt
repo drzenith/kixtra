@@ -29,7 +29,12 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import com.drzenith.kixtra.chat.ChatSource
+import com.drzenith.kixtra.chat.LiveChat
+import com.drzenith.kixtra.chat.ReplayChat
+import com.drzenith.kixtra.chat.parseKickTime
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -98,6 +103,31 @@ class PlayerController(private val context: Context, private val store: Store) {
     val loading = MutableStateFlow(false)
     val speed = MutableStateFlow(1f)
     val isPlaying = MutableStateFlow(false)
+
+    /** Fires whenever a frame is first drawn on a (new) video surface; used for smooth hand-offs. */
+    val firstFrame = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
+    /**
+     * Chat for what's playing. It belongs to the video, not the player screen, so minimizing and
+     * expanding reuse what's already loaded. Replaced (and the old one dropped) when the video changes.
+     */
+    val chat = MutableStateFlow<ChatSource?>(null)
+    private var chatKey: Playable? = null
+
+    fun syncChat() {
+        val p = current.value
+        val want = if (store.chatEnabled && p != null && p.channel.id != 0L && p !is Playable.ClipItem) p else null
+        if (want == chatKey && (want == null || chat.value != null)) return
+        chat.value?.stop()
+        chatKey = want
+        chat.value = when (want) {
+            is Playable.Live -> want.channel.chatroomId?.let { LiveChat(want.channel.id, it, scope) }
+            is Playable.Vod -> parseKickTime(want.video.startTime)?.let { start ->
+                ReplayChat(want.channel.id, start, scope) { player.currentPosition }
+            }
+            else -> null
+        }?.also { it.start() }
+    }
     val qualities = MutableStateFlow<List<Quality>>(emptyList())
 
     /** "Auto", "Audio only" or a quality label. */
@@ -113,6 +143,10 @@ class PlayerController(private val context: Context, private val store: Store) {
     init {
         player.addListener(object : Player.Listener {
             override fun onTracksChanged(tracks: Tracks) = rebuildQualities(tracks)
+
+            override fun onRenderedFirstFrame() {
+                firstFrame.tryEmit(Unit)
+            }
 
             override fun onIsPlayingChanged(playing: Boolean) {
                 isPlaying.value = playing
@@ -176,6 +210,7 @@ class PlayerController(private val context: Context, private val store: Store) {
         loadJob?.cancel()
         player.stop()
         current.value = null
+        syncChat()
         error.value = null
         loading.value = true
         resolveJob = scope.launch {
@@ -200,6 +235,7 @@ class PlayerController(private val context: Context, private val store: Store) {
     fun play(p: Playable, startAtMs: Long? = null) {
         saveProgress()
         current.value = p
+        syncChat()
         error.value = null
         qualities.value = emptyList()
         load(p, startPositionMs = startAtMs)
@@ -212,6 +248,7 @@ class PlayerController(private val context: Context, private val store: Store) {
         loadJob?.cancel()
         player.stop()
         current.value = null
+        syncChat()
         error.value = null
         loading.value = true
         resolveJob = scope.launch {
@@ -550,6 +587,7 @@ class PlayerController(private val context: Context, private val store: Store) {
         player.stop()
         player.clearMediaItems()
         current.value = null
+        syncChat()
         error.value = null
         qualities.value = emptyList()
     }

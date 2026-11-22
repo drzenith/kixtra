@@ -11,6 +11,9 @@ import com.drzenith.kixtra.data.Video
 import com.drzenith.kixtra.player.Playable
 import com.drzenith.kixtra.player.PlayerController
 import com.drzenith.kixtra.player.PlayerSheet
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Navigation + playback actions shared by all screens.
@@ -23,7 +26,14 @@ class Actions(val nav: Navigator, val player: PlayerController, val store: Store
     var playerExpanded by mutableStateOf(false)
 
     /** Drag/animation state for minimizing the expanded player. */
-    val sheet = PlayerSheet().also { it.onCollapsed = { playerExpanded = false } }
+    val sheet = PlayerSheet().also { sheet ->
+        sheet.onCollapsed = { playerExpanded = false }
+        // Hand-off: wait until the newly shown video view has drawn a frame (with a safety cap).
+        sheet.awaitFirstFrame = {
+            withTimeoutOrNull(500) { player.firstFrame.first() }
+            delay(16)
+        }
+    }
 
     fun openChannel(slug: String) {
         playerExpanded = false

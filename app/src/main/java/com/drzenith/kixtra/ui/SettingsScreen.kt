@@ -74,7 +74,7 @@ fun SettingsScreen(actions: Actions) {
                 sw,
             ) { sw = it; store.softwareDecoding = it }
             Toggle("Chat", "Live chat and VOD chat replay under the player", chat) {
-                chat = it; store.chatEnabled = it
+                chat = it; store.chatEnabled = it; actions.player.syncChat()
             }
             Text(
                 "Quality and VOD speed are remembered from the last ones you picked in the player.\n\n" +
