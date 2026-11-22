@@ -1,15 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Pop-out chat: a chat bubble inside the video frame (chat on top of the video). -->
+<!-- Pop-out chat: a chat bubble inside the video frame. Scaled to match Media3's icon size. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="21dp"
-    android:height="21dp"
+    android:width="24dp"
+    android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
-    <path
-        android:fillColor="#FFFFFFFF"
-        android:fillType="evenOdd"
-        android:pathData="M3,4h18a2,2 0 0 1 2,2v12a2,2 0 0 1 -2,2H3a2,2 0 0 1 -2,-2V6a2,2 0 0 1 2,-2z M3,6v12h18V6z" />
-    <path
-        android:fillColor="#FFFFFFFF"
-        android:pathData="M6,9h7a1,1 0 0 1 1,1v3.5a1,1 0 0 1 -1,1H9l-2.5,2v-2H6a1,1 0 0 1 -1,-1V10a1,1 0 0 1 1,-1z" />
+    <group
+        android:pivotX="12"
+        android:pivotY="12"
+        android:scaleX="0.72"
+        android:scaleY="0.72">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:fillType="evenOdd"
+            android:pathData="M3,4h18a2,2 0 0 1 2,2v12a2,2 0 0 1 -2,2H3a2,2 0 0 1 -2,-2V6a2,2 0 0 1 2,-2z M3,6v12h18V6z" />
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M6,9h7a1,1 0 0 1 1,1v3.5a1,1 0 0 1 -1,1H9l-2.5,2v-2H6a1,1 0 0 1 -1,-1V10a1,1 0 0 1 1,-1z" />
+    </group>
 </vector>

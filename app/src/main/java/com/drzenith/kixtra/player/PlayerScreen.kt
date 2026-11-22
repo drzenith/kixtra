@@ -487,7 +487,11 @@ private fun barButton(ctx: Context, text: String, sizeSp: Float = 13f): TextView
     val pad = (8 * density).toInt()
     setPadding(pad, 0, pad, 0)
     minWidth = (40 * density).toInt()
-    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, (48 * density).toInt())
+    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, (48 * density).toInt()).apply {
+        leftMargin = (2 * density).toInt()
+        rightMargin = (2 * density).toInt()
+        gravity = Gravity.CENTER_VERTICAL
+    }
     val tv = TypedValue()
     if (ctx.theme.resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, tv, true)) {
         setBackgroundResource(tv.resourceId)
@@ -497,11 +501,19 @@ private fun barButton(ctx: Context, text: String, sizeSp: Float = 13f): TextView
 }
 
 private fun barIcon(ctx: Context, res: Int, label: String): ImageButton = ImageButton(ctx).apply {
+    // Same box as Media3's own bottom-bar buttons (ExoStyledControls.Button.Bottom):
+    // 48x48dp, 12dp padding (24dp icon area), 2dp side margins, icon scaled to fit.
     val density = resources.displayMetrics.density
+    fun dp(v: Int) = (v * density).toInt()
     setImageResource(res)
     contentDescription = label
-    scaleType = android.widget.ImageView.ScaleType.CENTER
-    layoutParams = LinearLayout.LayoutParams((38 * density).toInt(), (48 * density).toInt())
+    scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+    setPadding(dp(12), dp(12), dp(12), dp(12))
+    layoutParams = LinearLayout.LayoutParams(dp(48), dp(48)).apply {
+        leftMargin = dp(2)
+        rightMargin = dp(2)
+        gravity = Gravity.CENTER_VERTICAL
+    }
     val tv = TypedValue()
     if (ctx.theme.resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, tv, true)) {
         setBackgroundResource(tv.resourceId)
