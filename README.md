@@ -8,6 +8,6 @@ A no-login Android frontend for [Kick](https://kick.com), inspired by [Xtra](htt
 - **Chat:** live chat and synced VOD chat replay, as a sidebar or an overlay on the video
 - **Local follows, search and browsing,** no account needed
 
-Download the latest APK from [Releases](https://github.com/drzenith/kixtra/releases/latest).
+Download the latest APK from [Releases](https://github.com/drzenith/kixtra/releases/tag/latest).
 
 License: AGPL-3.0
