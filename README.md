@@ -2,23 +2,28 @@
 
 A no-login Android viewer for Kick, inspired by [Xtra](https://github.com/crackededed/Xtra).
 
-- Search channels, live streams and categories, with type / live-only / language filters
-- Clips: top clips, per channel and per category, by views or date over day/week/month/all
-- Language + sort filters for live streams, default language and hide-18+ in Settings
-- Live streams, VODs, and **live VODs that keep growing** (watch a stream from the start while it's still live)
-- Xtra-style quality picker (incl. audio only) and VOD speed up to 4x — both remembered
-- Live chat and synced VOD chat replay (with emotes)
-- Local follows (stored on the device), browse top streams and categories
-- Phone-first layout with a bottom tab bar; grids and side-by-side chat on wide screens
-- Automatic fallback to software video decoding (for Waydroid/emulators)
-- Picture-in-picture and background audio
-- Opens kick.com links
+**Watching**
+- Live streams are rewindable: they play the stream's VOD at the live point, so you can scroll back anytime; "Go live" jumps back. At 2–4x you catch up to live seamlessly. (A plain low-latency live mode is in Settings.)
+- VODs and clips with Xtra-style quality picker (incl. audio only) and speed up to 4x — both remembered
+- Resume where you left off, including streams you stopped watching while they were live
+- Instant scrub previews, prepared in the background while you watch
+- "Continue in VOD" from any clip
+- Swipe down to a floating mini player and keep browsing; picture-in-picture and background audio
+
+**Chat**
+- Live chat and VOD chat replay in sync at any speed, with emotes
+- Resizable side chat in landscape, plus an optional pop-out chat overlay on the video
+
+**Browsing**
+- Search channels, live streams and categories, with filters
+- Local follows (stored on the device), sorted by most recently live, with live follows featured
+- Top live streams and categories with language/sort filters; top clips by channel or category
 
 ## Getting the APK
 
 Every push to `main` builds the app on GitHub Actions and publishes it as the
-**latest** release: Releases → `latest` → `kixtra.apk`. All builds are signed with the
-same private key (stored as the `KIXTRA_KEYSTORE_B64` and `KIXTRA_KEYSTORE_PASSWORD`
+**latest** release: Releases → `latest` → `kixtra.apk`. Builds are signed with the same
+private key (stored as the `KIXTRA_KEYSTORE_B64` and `KIXTRA_KEYSTORE_PASSWORD`
 repository secrets), so new builds install over old ones. Local builds use the debug key.
 
 ## Notes
