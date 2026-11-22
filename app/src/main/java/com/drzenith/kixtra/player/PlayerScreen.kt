@@ -274,7 +274,10 @@ fun PlayerScreen(actions: Actions) {
         speed = if (seekable) speedLabel(speed) else null,
         onQuality = { v -> showMenu(v, qOptions, selectedQ) },
         onSpeed = { v -> showMenu(v, SPEEDS.map { s -> speedLabel(s) to { pc.setSpeed(s) } }, speedLabel(speed)) },
-        onRefresh = { pc.reload(keepPosition = true) },
+        onRefresh = {
+            pc.reload(keepPosition = true)
+            pc.reloadChat()
+        },
         sideChat = if (fullscreen && chat != null) chatInLandscape else null,
         overlayChat = if (fullscreen && chat != null) overlayOn else null,
         onSideChat = { chatInLandscape = !chatInLandscape },
@@ -778,7 +781,7 @@ private fun InfoBar(actions: Actions) {
                     Spacer(Modifier.width(8.dp))
                     when {
                         p is Playable.Live -> Badge("LIVE • ${compact(ch.live?.viewers ?: 0)}", LiveRed)
-                        p is Playable.Vod && p.dvr -> Badge("FROM START", AccentCyan, Color(0xFF032B33))
+                        p is Playable.Vod && p.dvr -> Badge("LIVE • ${compact(ch.live?.viewers ?: 0)}", LiveRed)
                         p is Playable.Vod && p.video.isLive -> Badge("LIVE VOD", AccentCyan, Color(0xFF032B33))
                         p is Playable.ClipItem -> Badge("CLIP", Color(0xFF3A3D41))
                     }
@@ -794,8 +797,10 @@ private fun ContextAction(actions: Actions) {
     val current by actions.player.current.collectAsState()
     val p = current ?: return
     when {
+        // Plain live stream (rewindable live turned off): offer the VOD from the start.
         p is Playable.Live && p.channel.live != null -> Pill("⏮ From start") { actions.watchFromStart(p.channel) }
-        p is Playable.Vod && p.dvr -> Pill("● Go live") { actions.player.playLive(p.channel.slug) }
+        // Any still-running VOD: jump to the newest part.
+        p is Playable.Vod && p.growing -> Pill("● Go live") { actions.player.goLive() }
         p is Playable.ClipItem -> Pill("▶ Continue in VOD") { actions.continueClipInVod(p.clip) }
     }
 }

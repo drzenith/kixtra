@@ -50,7 +50,7 @@ class Actions(val nav: Navigator, val player: PlayerController, val store: Store
     }
 
     fun playLive(channel: Channel) {
-        player.play(Playable.Live(channel))
+        player.playChannel(channel)
         showPlayer()
     }
 
@@ -83,7 +83,7 @@ class Actions(val nav: Navigator, val player: PlayerController, val store: Store
 
     /** Start the growing VOD of the current live stream from the beginning. */
     fun watchFromStart(channel: Channel) {
-        player.play(Playable.Vod(channel, dvrVideo(channel) ?: return, dvr = true))
+        player.play(Playable.Vod(channel, dvrVideo(channel) ?: return, dvr = true), startAtMs = 0L)
         showPlayer()
     }
 

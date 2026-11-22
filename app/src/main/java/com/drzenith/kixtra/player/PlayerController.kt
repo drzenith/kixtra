@@ -18,6 +18,15 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.exoplayer.hls.HlsMediaSource
+import androidx.media3.exoplayer.hls.playlist.DefaultHlsPlaylistParserFactory
+import androidx.media3.exoplayer.hls.playlist.HlsMediaPlaylist
+import androidx.media3.exoplayer.hls.playlist.HlsMultivariantPlaylist
+import androidx.media3.exoplayer.hls.playlist.HlsPlaylist
+import androidx.media3.exoplayer.hls.playlist.HlsPlaylistParserFactory
+import androidx.media3.exoplayer.hls.playlist.HlsPlaylistTracker
+import androidx.media3.exoplayer.upstream.ParsingLoadable
 import android.graphics.Bitmap
 import android.view.TextureView
 import com.drzenith.kixtra.net.Http
@@ -52,10 +61,18 @@ sealed class Playable {
     data class Live(override val channel: Channel) : Playable()
 
     /**
-     * A VOD. [dvr] = the still-growing VOD of the stream that is live right now
-     * ("watch from start"); Kick serves it as a playlist that keeps getting longer.
+     * A VOD. [dvr] = the VOD of the stream that is live right now. [startAtLive] = open it at the
+     * live point (how live channels are watched), rather than at a saved position.
      */
-    data class Vod(override val channel: Channel, val video: Video, val dvr: Boolean = false) : Playable()
+    data class Vod(
+        override val channel: Channel,
+        val video: Video,
+        val dvr: Boolean = false,
+        val startAtLive: Boolean = false,
+    ) : Playable() {
+        /** Still being recorded: the playlist keeps growing. */
+        val growing: Boolean get() = dvr || video.isLive
+    }
 
     data class ClipItem(override val channel: Channel, val clip: Clip) : Playable()
 
@@ -102,6 +119,22 @@ class PlayerController(private val context: Context, private val store: Store) {
         .setSeekBackIncrementMs(10_000)
         .setSeekForwardIncrementMs(10_000)
         .build()
+
+    /**
+     * Kick serves the VOD of a still-running stream as a playlist marked "finished". Stripping
+     * that marker makes ExoPlayer treat it as a growing (EVENT) playlist: it re-checks it in the
+     * background and new parts are appended without interrupting playback.
+     */
+    @Volatile private var stripEndList = false
+
+    /** Set if Kick's playlist didn't grow when re-checked; we then fall back to reloading it. */
+    private var snapshotMode = false
+
+    private val hlsFactory = HlsMediaSource.Factory(DefaultDataSource.Factory(context))
+        .setPlaylistParserFactory(GrowingPlaylistParserFactory { stripEndList })
+
+    /** Automatic speed change (catching up to live): don't save it as the user's speed. */
+    private var autoSpeed = false
 
     val current = MutableStateFlow<Playable?>(null)
     val error = MutableStateFlow<String?>(null)
@@ -170,7 +203,15 @@ class PlayerController(private val context: Context, private val store: Store) {
 
             override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
                 speed.value = playbackParameters.speed
-                if (current.value?.seekable == true) store.vodSpeed = playbackParameters.speed
+                if (autoSpeed) {
+                    autoSpeed = false
+                    return
+                }
+                val cur = current.value
+                // Opening a live channel starts at 1x; don't let that overwrite your VOD speed.
+                if (cur?.seekable == true && !(cur is Playable.Vod && cur.startAtLive && playbackParameters.speed == 1f)) {
+                    store.vodSpeed = playbackParameters.speed
+                }
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -198,6 +239,15 @@ class PlayerController(private val context: Context, private val store: Store) {
                     if (p != null) load(p, pos)
                     return
                 }
+                // Kick's playlist didn't grow when re-checked: fall back to reloading fresh copies.
+                val stuck = generateSequence(e as Throwable) { it.cause }
+                    .any { it is HlsPlaylistTracker.PlaylistStuckException }
+                if (stuck && p is Playable.Vod && p.growing && !snapshotMode) {
+                    Log.i(tag, "Live VOD playlist did not grow; switching to reload mode")
+                    snapshotMode = true
+                    reload(keepPosition = true)
+                    return
+                }
                 // Signed playlist URLs expire; for VODs try once more with a fresh URL.
                 if (p != null && !decoderError && System.currentTimeMillis() - lastRefreshAt > 20_000) {
                     reload(keepPosition = true)
@@ -206,6 +256,20 @@ class PlayerController(private val context: Context, private val store: Store) {
                 }
             }
         })
+        // Catching up to live at >1x: drop to 1x right before the live point instead of stalling.
+        scope.launch {
+            while (isActive) {
+                delay(1_000)
+                val p = current.value as? Playable.Vod ?: continue
+                if (!p.growing || player.playbackParameters.speed <= 1f || player.duration <= 0) continue
+                val remaining = player.duration - player.currentPosition
+                if (remaining in 0..20_000) {
+                    autoSpeed = true
+                    player.setPlaybackSpeed(1f)
+                    notice.value = "Caught up to live, playing at 1x"
+                }
+            }
+        }
         // Save resume positions periodically.
         scope.launch {
             while (isActive) {
@@ -236,7 +300,7 @@ class PlayerController(private val context: Context, private val store: Store) {
                     error.value = "${ch.username} is offline"
                     loading.value = false
                 } else {
-                    play(Playable.Live(ch))
+                    playChannel(ch)
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -248,7 +312,42 @@ class PlayerController(private val context: Context, private val store: Store) {
     }
 
     /** [startAtMs] overrides the saved resume position (VODs only). */
+    /**
+     * Watch a live channel. By default this plays the stream's VOD at the live point, so you can
+     * rewind anywhere; "Go live" jumps back. Settings can switch to the plain (lower latency)
+     * live stream instead.
+     */
+    fun playChannel(ch: Channel) {
+        val dvr = if (store.rewindableLive) com.drzenith.kixtra.ui.Actions.dvrVideo(ch) else null
+        if (dvr != null) play(Playable.Vod(ch, dvr, dvr = true, startAtLive = true)) else play(Playable.Live(ch))
+    }
+
+    /** Jump to the newest part of a live VOD (no reload). */
+    fun goLive() {
+        val p = current.value as? Playable.Vod ?: return
+        if (!p.growing) return
+        if (snapshotMode) {
+            player.seekTo((player.duration - 15_000).coerceAtLeast(0))
+        } else {
+            player.seekToDefaultPosition()
+        }
+        if (player.playbackParameters.speed > 1f) {
+            autoSpeed = true
+            player.setPlaybackSpeed(1f)
+        }
+        player.play()
+    }
+
+    /** Restart chat for the current video (the refresh button; unsticks a stalled chat). */
+    fun reloadChat() {
+        chat.value?.stop()
+        chat.value = null
+        chatKey = null
+        syncChat()
+    }
+
     fun play(p: Playable, startAtMs: Long? = null) {
+        if (p != current.value) snapshotMode = false
         saveProgress()
         current.value = p
         syncChat()
@@ -302,8 +401,19 @@ class PlayerController(private val context: Context, private val store: Store) {
         qualityAppliedForItem = false
         loadJob = scope.launch {
             try {
+                var p = p
                 val url: String
                 val metaTitle: String
+                // Live channel opened at its live point: if Kick has no VOD for it yet, play the
+                // plain live stream instead.
+                if (p is Playable.Vod && p.dvr && p.startAtLive) {
+                    val dvrUrl = KickApi.liveDvrUrl(p.channel)
+                    if (dvrUrl == null && p.channel.live?.playbackUrl != null) {
+                        p = Playable.Live(p.channel)
+                        current.value = p
+                        syncChat()
+                    }
+                }
                 when (p) {
                     is Playable.Live -> {
                         url = p.channel.live?.playbackUrl
@@ -338,8 +448,12 @@ class PlayerController(private val context: Context, private val store: Store) {
                     .setMediaMetadata(meta)
                 // Clips can be plain MP4; everything else is HLS.
                 if (p !is Playable.ClipItem || url.contains(".m3u8")) builder.setMimeType(MimeTypes.APPLICATION_M3U8)
+                stripEndList = p is Playable.Vod && p.growing && !snapshotMode
+                fun source(item: MediaItem) = if (currentIsHls) hlsFactory.createMediaSource(item) else null
                 if (p is Playable.ClipItem) {
-                    player.setMediaItem(builder.build(), startPositionMs ?: 0L)
+                    val item = builder.build()
+                    source(item)?.let { player.setMediaSource(it, startPositionMs ?: 0L) }
+                        ?: player.setMediaItem(item, startPositionMs ?: 0L)
                     player.setPlaybackSpeed(store.vodSpeed)
                 } else if (p is Playable.Vod) {
                     // A growing VOD is a "live" playlist to ExoPlayer. Stop it from nudging the
@@ -350,11 +464,17 @@ class PlayerController(private val context: Context, private val store: Store) {
                             .setMaxPlaybackSpeed(1f)
                             .build()
                     )
-                    val resume = startPositionMs ?: resumePosition(p)
-                    player.setMediaItem(builder.build(), resume)
-                    player.setPlaybackSpeed(store.vodSpeed)
+                    val src = hlsFactory.createMediaSource(builder.build())
+                    if (p.startAtLive && startPositionMs == null) {
+                        // Default position of a growing playlist = just behind the live point.
+                        player.setMediaSource(src)
+                        player.setPlaybackSpeed(1f)
+                    } else {
+                        player.setMediaSource(src, startPositionMs ?: resumePosition(p))
+                        player.setPlaybackSpeed(store.vodSpeed)
+                    }
                 } else {
-                    player.setMediaItem(builder.build())
+                    player.setMediaSource(hlsFactory.createMediaSource(builder.build()))
                     player.setPlaybackSpeed(1f)
                 }
                 applyVideoDisabled()
@@ -399,15 +519,18 @@ class PlayerController(private val context: Context, private val store: Store) {
 
     private fun onEnded() {
         val p = current.value as? Playable.Vod ?: return
-        val stillLive = p.dvr || p.video.isLive
-        if (!stillLive) return
+        if (!p.growing) return
+        // A growing playlist never "ends" while live; this is only reached in reload mode
+        // (or once the stream is over).
         // If Kick handed us a fixed snapshot of a VOD that is still growing, fetch the newer
         // playlist and carry on from the same spot.
         refreshJob?.cancel()
         refreshJob = scope.launch {
             val wait = 15_000 - (System.currentTimeMillis() - lastRefreshAt)
             if (wait > 0) delay(wait)
-            reload(keepPosition = true)
+            // Stream over? Then this really is the end.
+            val stillLive = runCatching { KickApi.channel(p.channel.slug).live != null }.getOrDefault(true)
+            if (stillLive) reload(keepPosition = true)
         }
     }
 
@@ -770,5 +893,41 @@ class PlayerController(private val context: Context, private val store: Store) {
         syncChat()
         error.value = null
         qualities.value = emptyList()
+    }
+}
+
+
+/**
+ * Wraps Media3's HLS playlist parser. While [strip] is true, media playlists lose their
+ * "#EXT-X-ENDLIST" (and VOD type becomes EVENT), so a still-growing VOD is played as a growing
+ * playlist: refreshed in the background, seekable from the start.
+ */
+private class GrowingPlaylistParserFactory(private val strip: () -> Boolean) : HlsPlaylistParserFactory {
+    private val base = DefaultHlsPlaylistParserFactory()
+
+    override fun createPlaylistParser(): ParsingLoadable.Parser<HlsPlaylist> =
+        wrap(base.createPlaylistParser())
+
+    override fun createPlaylistParser(
+        multivariantPlaylist: HlsMultivariantPlaylist,
+        previousMediaPlaylist: HlsMediaPlaylist?,
+    ): ParsingLoadable.Parser<HlsPlaylist> =
+        wrap(base.createPlaylistParser(multivariantPlaylist, previousMediaPlaylist))
+
+    private fun wrap(parser: ParsingLoadable.Parser<HlsPlaylist>) = ParsingLoadable.Parser<HlsPlaylist> { uri, input ->
+        if (!strip()) {
+            parser.parse(uri, input)
+        } else {
+            val text = input.readBytes().toString(Charsets.UTF_8)
+            if (!text.contains("#EXTINF")) {
+                parser.parse(uri, text.byteInputStream())
+            } else {
+                val fixed = text.lineSequence()
+                    .filterNot { it.trim() == "#EXT-X-ENDLIST" }
+                    .map { if (it.trim().startsWith("#EXT-X-PLAYLIST-TYPE:VOD")) "#EXT-X-PLAYLIST-TYPE:EVENT" else it }
+                    .joinToString("\n")
+                parser.parse(uri, fixed.byteInputStream())
+            }
+        }
     }
 }

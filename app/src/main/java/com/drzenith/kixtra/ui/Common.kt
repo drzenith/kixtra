@@ -78,6 +78,14 @@ fun hms(ms: Long): String {
     else String.format(Locale.US, "%d:%02d", m, sec)
 }
 
+/** How long a stream has been live: "45m", "2h 15m". */
+fun uptime(start: String?): String? {
+    val t = parseKickTime(start) ?: return null
+    val mins = Duration.between(t, Instant.now()).toMinutes()
+    if (mins < 0) return null
+    return if (mins < 60) "${mins}m" else "${mins / 60}h ${mins % 60}m"
+}
+
 fun ago(time: String?): String = parseKickTime(time)?.let { agoInstant(it) } ?: ""
 
 fun agoMs(epochMs: Long): String = agoInstant(Instant.ofEpochMilli(epochMs))
@@ -159,9 +167,14 @@ fun Thumb(url: String?, modifier: Modifier = Modifier, overlay: @Composable () -
 fun StreamCard(item: StreamItem, onClick: () -> Unit, onChannel: () -> Unit) {
     Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 8.dp)) {
         Thumb(item.thumbnail) {
-            Row(Modifier.padding(6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                Badge("LIVE", LiveRed)
-                Badge("${compact(item.viewers)} viewers", Color(0xCC000000))
+            Box(Modifier.fillMaxSize().padding(6.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Badge("LIVE", LiveRed)
+                    Badge("${compact(item.viewers)} viewers", Color(0xCC000000))
+                }
+                uptime(item.startTime)?.let {
+                    Badge(it, Color(0xCC000000), modifier = Modifier.align(Alignment.BottomEnd))
+                }
             }
         }
         Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.Top) {

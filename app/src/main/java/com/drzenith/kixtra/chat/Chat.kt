@@ -64,6 +64,11 @@ fun parseKickTime(value: String?): Instant? {
 
 private const val MAX_MESSAGES = 250
 
+/** WebSocket client with keep-alive pings, so a dead connection is detected and reconnected. */
+private val wsClient by lazy {
+    Http.client.newBuilder().pingInterval(25, java.util.concurrent.TimeUnit.SECONDS).build()
+}
+
 /** Common shape of live chat and VOD chat replay. */
 interface ChatSource {
     val messages: StateFlow<List<ChatMsg>>
@@ -86,6 +91,7 @@ class LiveChat(
     private val seen = LinkedHashSet<String>()
     private var socket: WebSocket? = null
     @Volatile private var subscribed = false
+    @Volatile private var lastEventAt = 0L
     @Volatile private var stopped = false
     private var config: KickApi.PusherConfig? = null
     private var job: Job? = null
@@ -103,6 +109,12 @@ class LiveChat(
                     status.value = "Chat (polling)"
                     runCatching { KickApi.chatHistory(channelId) }
                         .onSuccess { list -> add(list.mapNotNull(ChatMsg::parse).sortedBy { it.time }) }
+                } else if (System.currentTimeMillis() - lastEventAt > 150_000) {
+                    // Watchdog: Pusher sends at least a ping every ~2 minutes. Silence means the
+                    // connection died without telling us; force a reconnect.
+                    Log.w(tag, "chat socket silent, reconnecting")
+                    subscribed = false
+                    socket?.cancel()
                 }
                 delay(3_000)
             }
@@ -129,7 +141,8 @@ class LiveChat(
         val cfg = config ?: KickApi.FALLBACK_PUSHER
         val url = "wss://ws-${cfg.cluster}.pusher.com/app/${cfg.key}?protocol=7&client=js&version=8.4.0&flash=false"
         val req = Request.Builder().url(url).header("Origin", "https://kick.com").header("User-Agent", Http.BROWSER_UA).build()
-        socket = Http.client.newWebSocket(req, object : WebSocketListener() {
+        lastEventAt = System.currentTimeMillis()
+        socket = wsClient.newWebSocket(req, object : WebSocketListener() {
             override fun onMessage(webSocket: WebSocket, text: String) = handle(webSocket, text)
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -152,6 +165,7 @@ class LiveChat(
     }
 
     private fun handle(ws: WebSocket, text: String) {
+        lastEventAt = System.currentTimeMillis()
         val o = runCatching { Http.json.parseToJsonElement(text).obj() }.getOrNull() ?: return
         when (o.s("event")) {
             "pusher:connection_established" -> ws.send(
@@ -200,6 +214,7 @@ class ReplayChat(
     private var lastBucket: Long? = null
     private var job: Job? = null
     private var backfillJob: Job? = null
+    private var lastRecentFetch = 0L
     private val bucketMs = 5_000L
     private val formatter = DateTimeFormatterBuilder().appendInstant(3).toFormatter()
 
@@ -221,6 +236,17 @@ class ReplayChat(
                     lastBucket = bucket
                     for (b in bucket..bucket + 2) {
                         if (fetched.add(b)) launch { fetch(b) }
+                    }
+                }
+                // Near the live point (a still-running stream), chat for "now" is still arriving:
+                // re-check the current buckets every few seconds instead of only once.
+                val nowMs = System.currentTimeMillis()
+                val bucketWall = start.toEpochMilli() + bucket * bucketMs
+                if (bucketWall > nowMs - 60_000 && nowMs - lastRecentFetch > 3_000) {
+                    lastRecentFetch = nowMs
+                    launch {
+                        fetchAt(bucket * bucketMs)
+                        fetchAt((bucket + 1) * bucketMs)
                     }
                 }
                 buffer.values.removeAll { it.offsetMs < pos - 900_000 }

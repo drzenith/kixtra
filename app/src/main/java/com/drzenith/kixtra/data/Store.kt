@@ -72,6 +72,11 @@ class Store(context: Context) {
         get() = prefs.getInt("ov_bg", 1)
         set(v) = prefs.edit { putInt("ov_bg", v) }
 
+    /** Live channels play their VOD at the live point (rewindable) instead of the plain live stream. */
+    var rewindableLive: Boolean
+        get() = prefs.getBoolean("rewindable_live", true)
+        set(v) = prefs.edit { putBoolean("rewindable_live", v) }
+
     var askedNotifications: Boolean
         get() = prefs.getBoolean("asked_notif", false)
         set(v) = prefs.edit { putBoolean("asked_notif", v) }

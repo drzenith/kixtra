@@ -234,7 +234,7 @@ private fun FollowingTab(state: Screen.Home, follows: List<FollowedChannel>, act
         items(live, key = { "live_" + it.slug }) { ch ->
             val l = ch.live!!
             StreamCard(
-                item = StreamItem(ch.slug, ch.username, l.title, l.viewers, l.category, thumbFor(state, ch.slug, l.thumbnail), ch.avatar),
+                item = StreamItem(ch.slug, ch.username, l.title, l.viewers, l.category, thumbFor(state, ch.slug, l.thumbnail), ch.avatar, startTime = l.startTime),
                 onClick = { actions.playLive(ch) },
                 onChannel = { actions.openChannel(ch.slug) },
             )
@@ -277,7 +277,7 @@ private fun LiveTab(state: Screen.Home, actions: Actions, scope: CoroutineScope)
                         val l = ch.live!!
                         Column(Modifier.width(280.dp)) {
                             StreamCard(
-                                item = StreamItem(ch.slug, ch.username, l.title, l.viewers, l.category, thumbFor(state, ch.slug, l.thumbnail), ch.avatar),
+                                item = StreamItem(ch.slug, ch.username, l.title, l.viewers, l.category, thumbFor(state, ch.slug, l.thumbnail), ch.avatar, startTime = l.startTime),
                                 onClick = { actions.playLive(ch) },
                                 onChannel = { actions.openChannel(ch.slug) },
                             )

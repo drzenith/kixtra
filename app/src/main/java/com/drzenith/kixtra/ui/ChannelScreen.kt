@@ -111,6 +111,7 @@ fun ChannelScreen(state: Screen.ChannelPage, actions: Actions) {
                                 // Prefer the Live-tab-style thumbnail if Home already has one.
                                 (actions.nav.stack.firstOrNull() as? Screen.Home)?.followThumbs?.get(ch.slug.lowercase()) ?: live.thumbnail,
                                 ch.avatar,
+                                startTime = live.startTime,
                             ),
                             onClick = { actions.playLive(ch) },
                             onChannel = {},

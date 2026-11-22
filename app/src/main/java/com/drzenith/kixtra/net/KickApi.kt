@@ -149,6 +149,7 @@ object KickApi {
             avatar = ch.s("profile_picture") ?: ch.s("profile_pic") ?: ch.o("user").s("profile_pic"),
             language = ls.s("language") ?: ls.s("lang_iso"),
             mature = ls.b("is_mature") ?: false,
+            startTime = ls.s("start_time") ?: ls.s("started_at") ?: ls.s("created_at"),
         )
     }
 

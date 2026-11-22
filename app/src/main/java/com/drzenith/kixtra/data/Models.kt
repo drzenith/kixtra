@@ -36,6 +36,8 @@ data class StreamItem(
     val avatar: String?,
     val language: String? = null,
     val mature: Boolean = false,
+    /** When the stream started (for the uptime badge). */
+    val startTime: String? = null,
 )
 
 data class Clip(

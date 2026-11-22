@@ -33,6 +33,7 @@ fun SettingsScreen(actions: Actions) {
     var pip by remember { mutableStateOf(store.pipEnabled) }
     var chat by remember { mutableStateOf(store.chatEnabled) }
     var sw by remember { mutableStateOf(store.softwareDecoding) }
+    var rewind by remember { mutableStateOf(store.rewindableLive) }
     var mature by remember { mutableStateOf(store.hideMature) }
     var language by remember { mutableStateOf(store.defaultLanguage) }
     var langOpen by remember { mutableStateOf(false) }
@@ -62,6 +63,11 @@ fun SettingsScreen(actions: Actions) {
             }
 
             Section("Playback")
+            Toggle(
+                "Rewindable live streams",
+                "Live streams play their VOD at the live point, so you can scroll back anytime. Turn off for the plain live stream (a few seconds less delay, no rewinding).",
+                rewind,
+            ) { rewind = it; store.rewindableLive = it }
             Toggle("Background audio", "Keep listening when you leave the app (video stops downloading)", bg) {
                 bg = it; store.backgroundAudio = it
             }
