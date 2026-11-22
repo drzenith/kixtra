@@ -351,8 +351,10 @@ fun PlayerScreen(actions: Actions) {
         Row(Modifier.fillMaxSize().background(Color.Black)) {
             video(Modifier.weight(1f).fillMaxHeight())
             if (chat != null && chatInLandscape) {
-                sideChat()
-                ChatView(chatMessages?.value ?: emptyList(), chatStatus?.value ?: "", Modifier.width(chatWidth).fillMaxHeight())
+                Box(Modifier.width(chatWidth).fillMaxHeight()) {
+                    ChatView(chatMessages?.value ?: emptyList(), chatStatus?.value ?: "", Modifier.fillMaxSize())
+                    Box(Modifier.align(Alignment.CenterStart)) { sideChat() }
+                }
             }
         }
     } else if (wide) {
@@ -362,8 +364,10 @@ fun PlayerScreen(actions: Actions) {
                 Box(fadeWithSheet) { InfoBar(actions) }
             }
             if (chat != null) {
-                Box(fadeWithSheet) { sideChat() }
-                ChatView(chatMessages?.value ?: emptyList(), chatStatus?.value ?: "", Modifier.width(chatWidth).fillMaxHeight().then(fadeWithSheet))
+                Box(Modifier.width(chatWidth).fillMaxHeight().then(fadeWithSheet)) {
+                    ChatView(chatMessages?.value ?: emptyList(), chatStatus?.value ?: "", Modifier.fillMaxSize())
+                    Box(Modifier.align(Alignment.CenterStart)) { sideChat() }
+                }
             }
         }
     } else {
@@ -379,26 +383,19 @@ fun PlayerScreen(actions: Actions) {
     }
 }
 
-/** Vertical divider between video and side chat; drag left/right to resize the chat. */
+/** Invisible drag strip on the side chat's left edge; drag left/right to resize the chat. */
 @Composable
 private fun ChatResizeHandle(onDrag: (androidx.compose.ui.unit.Dp) -> Unit, onDragEnd: () -> Unit) {
     val density = LocalDensity.current
     Box(
-        Modifier.fillMaxHeight().width(14.dp).background(MaterialTheme.colorScheme.surfaceContainer)
+        Modifier.fillMaxHeight().width(14.dp)
             .pointerInput(Unit) {
                 detectHorizontalDragGestures(onDragEnd = onDragEnd, onDragCancel = onDragEnd) { change, amount ->
                     change.consume()
                     onDrag(with(density) { amount.toDp() })
                 }
-            },
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            Modifier.width(4.dp).fillMaxHeight(0.12f)
-                .clip(RoundedCornerShape(2.dp))
-                .background(MaterialTheme.colorScheme.outline)
-        )
-    }
+            }
+    )
 }
 
 /** Small frame preview + timestamp that follows the scrub position along the seek bar. */
