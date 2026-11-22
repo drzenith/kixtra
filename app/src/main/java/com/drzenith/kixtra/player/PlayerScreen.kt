@@ -152,9 +152,12 @@ class BarSpec(
     val overlayChat: Boolean? = null,
     val onSideChat: () -> Unit = {},
     val onOverlayChat: () -> Unit = {},
+    /** Show "● LIVE" instead of the time readout. */
+    val atLive: Boolean = false,
 )
 
 private class BarButtons(
+    val liveLabel: TextView?,
     val quality: TextView,
     val speed: TextView,
     val refresh: TextView,
@@ -184,6 +187,7 @@ fun PlayerScreen(actions: Actions) {
     val qualities by pc.qualities.collectAsState()
     val selectedQ by pc.selectedQuality.collectAsState()
     val speed by pc.speed.collectAsState()
+    val atLive by pc.atLive.collectAsState()
     val context = LocalContext.current
     val activity = context.findActivity()
     val cfg = LocalConfiguration.current
@@ -281,6 +285,7 @@ fun PlayerScreen(actions: Actions) {
         sideChat = if (fullscreen && chat != null) chatInLandscape else null,
         overlayChat = if (fullscreen && chat != null) overlayOn else null,
         onSideChat = { chatInLandscape = !chatInLandscape },
+        atLive = atLive,
         onOverlayChat = { overlayOn = !overlayOn },
     )
     val onScrub: (Long?) -> Unit = { pos ->
@@ -717,7 +722,18 @@ internal fun VideoBox(
                         basic.addView(r, 0)
                         basic.addView(s, 0)
                         basic.addView(q, 0)
-                        tag = BarButtons(q, s, r, sc, oc)
+                        // "● LIVE" in place of the time readout while at the live point (like kick.com).
+                        val live = findViewById<ViewGroup>(androidx.media3.ui.R.id.exo_time)?.let { time ->
+                            TextView(ctx).apply {
+                                text = "● LIVE"
+                                setTextColor(LiveRed.toArgb())
+                                textSize = 13f
+                                typeface = Typeface.DEFAULT_BOLD
+                                visibility = View.GONE
+                                time.addView(this)
+                            }
+                        }
+                        tag = BarButtons(live, q, s, r, sc, oc)
                     }
                 }
                 setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { v -> ctl(v == View.VISIBLE) })
@@ -748,6 +764,18 @@ internal fun VideoBox(
                 b.sideChat.visibility = if (spec.sideChat == null) View.GONE else View.VISIBLE
                 b.sideChat.alpha = if (spec.sideChat == true) 1f else 0.55f
                 b.overlayChat.visibility = if (spec.overlayChat == null) View.GONE else View.VISIBLE
+                b.liveLabel?.let { label ->
+                    val time = label.parent as? ViewGroup
+                    if (time != null) {
+                        for (i in 0 until time.childCount) {
+                            val child = time.getChildAt(i)
+                            child.visibility = when {
+                                child === label -> if (spec.atLive) View.VISIBLE else View.GONE
+                                else -> if (spec.atLive) View.GONE else View.VISIBLE
+                            }
+                        }
+                    }
+                }
                 b.overlayChat.alpha = if (spec.overlayChat == true) 1f else 0.55f
             }
         },
@@ -795,12 +823,13 @@ private fun InfoBar(actions: Actions) {
 @Composable
 private fun ContextAction(actions: Actions) {
     val current by actions.player.current.collectAsState()
+    val atLive by actions.player.atLive.collectAsState()
     val p = current ?: return
     when {
         // Plain live stream (rewindable live turned off): offer the VOD from the start.
         p is Playable.Live && p.channel.live != null -> Pill("⏮ From start") { actions.watchFromStart(p.channel) }
         // Any still-running VOD: jump to the newest part.
-        p is Playable.Vod && p.growing -> Pill("● Go live") { actions.player.goLive() }
+        p is Playable.Vod && p.growing && !atLive -> Pill("● Go live") { actions.player.goLive() }
         p is Playable.ClipItem -> Pill("▶ Continue in VOD") { actions.continueClipInVod(p.clip) }
     }
 }

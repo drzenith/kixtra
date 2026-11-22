@@ -19,6 +19,7 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.exoplayer.hls.HlsManifest
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.hls.playlist.DefaultHlsPlaylistParserFactory
 import androidx.media3.exoplayer.hls.playlist.HlsMediaPlaylist
@@ -135,6 +136,18 @@ class PlayerController(private val context: Context, private val store: Store) {
 
     /** Automatic speed change (catching up to live): don't save it as the user's speed. */
     private var autoSpeed = false
+
+    /** True while a live VOD is playing at (or just behind) its live point: the UI shows "LIVE". */
+    val atLive = MutableStateFlow(false)
+
+    private fun targetDurationMs(): Long =
+        ((player.currentManifest as? HlsManifest)?.mediaPlaylist?.targetDurationUs ?: 0L) / 1000
+
+    /**
+     * How far behind the newest part "live" sits: one of Kick's segments plus a little slack (the
+     * player's default is three segments, ~1 minute). As close as a manual skip gets you.
+     */
+    private fun liveEdgeOffsetMs(): Long = (targetDurationMs() + 2_000).coerceIn(4_000, 20_000)
 
     val current = MutableStateFlow<Playable?>(null)
     val error = MutableStateFlow<String?>(null)
@@ -259,11 +272,17 @@ class PlayerController(private val context: Context, private val store: Store) {
         // Catching up to live at >1x: drop to 1x right before the live point instead of stalling.
         scope.launch {
             while (isActive) {
-                delay(1_000)
-                val p = current.value as? Playable.Vod ?: continue
-                if (!p.growing || player.playbackParameters.speed <= 1f || player.duration <= 0) continue
+                delay(250)
+                val p = current.value as? Playable.Vod
+                if (p == null || !p.growing || player.duration <= 0) {
+                    atLive.value = false
+                    continue
+                }
                 val remaining = player.duration - player.currentPosition
-                if (remaining in 0..20_000) {
+                val edge = liveEdgeOffsetMs()
+                // The newest part grows in segment-sized steps, so "at live" allows one segment of slack.
+                atLive.value = remaining <= edge + targetDurationMs() + 5_000
+                if (player.playbackParameters.speed > 1f && remaining <= edge) {
                     autoSpeed = true
                     player.setPlaybackSpeed(1f)
                     notice.value = "Caught up to live, playing at 1x"
@@ -326,11 +345,8 @@ class PlayerController(private val context: Context, private val store: Store) {
     fun goLive() {
         val p = current.value as? Playable.Vod ?: return
         if (!p.growing) return
-        if (snapshotMode) {
-            player.seekTo((player.duration - 15_000).coerceAtLeast(0))
-        } else {
-            player.seekToDefaultPosition()
-        }
+        player.seekTo((player.duration - liveEdgeOffsetMs()).coerceAtLeast(0))
+        atLive.value = true
         if (player.playbackParameters.speed > 1f) {
             autoSpeed = true
             player.setPlaybackSpeed(1f)
@@ -466,9 +482,16 @@ class PlayerController(private val context: Context, private val store: Store) {
                     )
                     val src = hlsFactory.createMediaSource(builder.build())
                     if (p.startAtLive && startPositionMs == null) {
-                        // Default position of a growing playlist = just behind the live point.
+                        // Default position of a growing playlist is ~3 segments back; once the
+                        // playlist is loaded, move to our closer live point.
                         player.setMediaSource(src)
                         player.setPlaybackSpeed(1f)
+                        val target = p
+                        scope.launch {
+                            if (awaitDuration() > 0 && current.value == target &&
+                                player.duration - player.currentPosition > liveEdgeOffsetMs() + 2_000
+                            ) goLive()
+                        }
                     } else {
                         player.setMediaSource(src, startPositionMs ?: resumePosition(p))
                         player.setPlaybackSpeed(store.vodSpeed)
