@@ -137,7 +137,11 @@ class PlayerController(private val context: Context, private val store: Store) {
     /** Automatic speed change (catching up to live): don't save it as the user's speed. */
     private var autoSpeed = false
 
-    /** True while a live VOD is playing at (or just behind) its live point: the UI shows "LIVE". */
+    /**
+     * LIVE is a state, not a distance (like YouTube/Twitch): you're live after Go live, catching up
+     * at >1x, or opening a live channel; any rewind or pause takes you out of it. The live point is
+     * treated as the end: skipping past it snaps back to it.
+     */
     val atLive = MutableStateFlow(false)
 
     private fun targetDurationMs(): Long =
@@ -240,6 +244,32 @@ class PlayerController(private val context: Context, private val store: Store) {
                 }
             }
 
+            override fun onPositionDiscontinuity(
+                oldPosition: Player.PositionInfo,
+                newPosition: Player.PositionInfo,
+                reason: Int,
+            ) {
+                if (reason != Player.DISCONTINUITY_REASON_SEEK) return
+                val p = current.value as? Playable.Vod ?: return
+                if (!p.growing || player.duration <= 0) return
+                val edge = liveEdgeOffsetMs()
+                val newRemaining = player.duration - newPosition.positionMs
+                when {
+                    // Past the live point (the buffering zone): snap back to it.
+                    newRemaining < edge - 500 -> {
+                        player.seekTo((player.duration - edge).coerceAtLeast(0))
+                        atLive.value = true
+                    }
+                    newPosition.positionMs < oldPosition.positionMs -> atLive.value = false
+                    newRemaining <= edge + 1_000 -> atLive.value = true
+                }
+            }
+
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                // Pausing means falling behind live.
+                if (!playWhenReady) atLive.value = false
+            }
+
             override fun onIsPlayingChanged(playing: Boolean) {
                 isPlaying.value = playing
             }
@@ -311,12 +341,17 @@ class PlayerController(private val context: Context, private val store: Store) {
                 trackGrowth(p)
                 val remaining = player.duration - player.currentPosition
                 val edge = liveEdgeOffsetMs()
-                // The newest part grows in steps, so "at live" allows one step of slack.
-                atLive.value = remaining <= edge + growthCadenceMs() + 5_000
                 if (player.playbackParameters.speed > 1f && remaining <= edge) {
+                    // Caught up at >1x: back to 1x, and you're live.
                     autoSpeed = true
                     player.setPlaybackSpeed(1f)
+                    atLive.value = true
                     notice.value = "Caught up to live, playing at 1x"
+                } else if (!atLive.value && player.isPlaying && remaining <= edge + 1_000) {
+                    atLive.value = true
+                } else if (atLive.value && remaining > edge + growthCadenceMs() + 10_000) {
+                    // Fell well behind (e.g. a long buffer): no longer live.
+                    atLive.value = false
                 }
             }
         }
@@ -395,6 +430,7 @@ class PlayerController(private val context: Context, private val store: Store) {
 
     fun play(p: Playable, startAtMs: Long? = null) {
         if (p != current.value) snapshotMode = false
+        atLive.value = false
         saveProgress()
         current.value = p
         syncChat()
@@ -519,9 +555,10 @@ class PlayerController(private val context: Context, private val store: Store) {
                         player.setPlaybackSpeed(1f)
                         val target = p
                         scope.launch {
-                            if (awaitDuration() > 0 && current.value == target &&
-                                player.duration - player.currentPosition > liveEdgeOffsetMs() + 2_000
-                            ) goLive()
+                            if (awaitDuration() > 0 && current.value == target) {
+                                if (player.duration - player.currentPosition > liveEdgeOffsetMs() + 2_000) goLive()
+                                else atLive.value = true
+                            }
                         }
                     } else {
                         player.setMediaSource(src, startPositionMs ?: resumePosition(p))
