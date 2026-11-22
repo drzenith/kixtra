@@ -2,11 +2,15 @@
 
 A no-login Android viewer for Kick, inspired by [Xtra](https://github.com/crackededed/Xtra).
 
-- Search channels, live streams and categories
+- Search channels, live streams and categories, with type / live-only / language filters
+- Clips: top clips, per channel and per category, by views or date over day/week/month/all
+- Language + sort filters for live streams, default language and hide-18+ in Settings
 - Live streams, VODs, and **live VODs that keep growing** (watch a stream from the start while it's still live)
 - Xtra-style quality picker (incl. audio only) and VOD speed up to 4x — both remembered
 - Live chat and synced VOD chat replay (with emotes)
 - Local follows (stored on the device), browse top streams and categories
+- Phone-first layout with a bottom tab bar; grids and side-by-side chat on wide screens
+- Automatic fallback to software video decoding (for Waydroid/emulators)
 - Picture-in-picture and background audio
 - Opens kick.com links
 

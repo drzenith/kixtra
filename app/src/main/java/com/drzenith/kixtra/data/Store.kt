@@ -35,6 +35,20 @@ class Store(context: Context) {
         get() = prefs.getInt("quality", 0)
         set(v) = prefs.edit { putInt("quality", v) }
 
+    /** Waydroid/emulators often have broken hardware decoders; auto-enabled after a decode error. */
+    var softwareDecoding: Boolean
+        get() = prefs.getBoolean("sw_decode", false)
+        set(v) = prefs.edit { putBoolean("sw_decode", v) }
+
+    /** Default stream language code ("" = any). */
+    var defaultLanguage: String
+        get() = prefs.getString("language", "") ?: ""
+        set(v) = prefs.edit { putString("language", v) }
+
+    var hideMature: Boolean
+        get() = prefs.getBoolean("hide_mature", false)
+        set(v) = prefs.edit { putBoolean("hide_mature", v) }
+
     var askedNotifications: Boolean
         get() = prefs.getBoolean("asked_notif", false)
         set(v) = prefs.edit { putBoolean("asked_notif", v) }

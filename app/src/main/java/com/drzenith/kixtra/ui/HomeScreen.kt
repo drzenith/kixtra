@@ -2,17 +2,26 @@ package com.drzenith.kixtra.ui
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridScope
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -20,16 +29,26 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.drzenith.kixtra.data.Channel
 import com.drzenith.kixtra.data.FollowedChannel
+import com.drzenith.kixtra.data.StreamItem
 import com.drzenith.kixtra.net.KickApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+
+private data class HomeTab(val label: String, val icon: ImageVector)
+
+private val TABS = listOf(
+    HomeTab("Following", Icons.Filled.Favorite),
+    HomeTab("Live", Icons.Filled.PlayArrow),
+    HomeTab("Categories", Icons.Filled.List),
+    HomeTab("Clips", Icons.Filled.Star),
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -39,24 +58,39 @@ fun HomeScreen(state: Screen.Home, actions: Actions) {
 
     Column(Modifier.fillMaxSize()) {
         TopAppBar(
-            title = { Text("Kixtra") },
+            title = { Text(TABS[state.tab].label) },
             actions = {
-                TextButton(onClick = { actions.openSearch() }) { Text("Search", fontSize = 15.sp) }
-                TextButton(onClick = { actions.openSettings() }) { Text("⚙", fontSize = 20.sp) }
+                if (state.tab == 0) {
+                    IconButton(onClick = { refreshFollows(state, follows, scope) }) {
+                        Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
+                    }
+                }
+                IconButton(onClick = { actions.openSearch() }) { Icon(Icons.Filled.Search, contentDescription = "Search") }
+                IconButton(onClick = { actions.openSettings() }) { Icon(Icons.Filled.Settings, contentDescription = "Settings") }
             },
         )
-        TabRow(selectedTabIndex = state.tab) {
-            listOf("Following", "Live", "Categories").forEachIndexed { i, label ->
-                Tab(selected = state.tab == i, onClick = { state.tab = i }, text = { Text(label) })
+        Column(Modifier.weight(1f).fillMaxWidth()) {
+            when (state.tab) {
+                0 -> FollowingTab(state, follows, actions, scope)
+                1 -> LiveTab(state, actions, scope)
+                2 -> CategoriesTab(state, actions, scope)
+                else -> ClipsTab(state, actions, scope)
             }
         }
-        when (state.tab) {
-            0 -> FollowingTab(state, follows, actions, scope)
-            1 -> LiveTab(state, actions, scope)
-            else -> CategoriesTab(state, actions, scope)
+        NavigationBar {
+            TABS.forEachIndexed { i, tab ->
+                NavigationBarItem(
+                    selected = state.tab == i,
+                    onClick = { state.tab = i },
+                    icon = { Icon(tab.icon, contentDescription = null) },
+                    label = { Text(tab.label) },
+                )
+            }
         }
     }
 }
+
+// ---------- Following ----------
 
 private suspend fun fetchFollows(list: List<FollowedChannel>): List<Channel> = coroutineScope {
     list.map { f ->
@@ -83,11 +117,15 @@ private fun refreshFollows(state: Screen.Home, follows: List<FollowedChannel>, s
     }
 }
 
+/** Full-width grid item (headers, footers, messages). */
+fun LazyGridScope.full(key: String? = null, content: @Composable () -> Unit) =
+    item(key = key, span = { GridItemSpan(maxLineSpan) }) { content() }
+
 @Composable
 private fun FollowingTab(state: Screen.Home, follows: List<FollowedChannel>, actions: Actions, scope: CoroutineScope) {
     LaunchedEffect(follows) { refreshFollows(state, follows, scope) }
     if (follows.isEmpty()) {
-        EmptyBox("No follows yet. Open a channel and tap Follow — follows are saved on this device.")
+        EmptyBox("No follows yet. Open a channel and tap Follow. Follows are saved on this device.")
         return
     }
     val data = state.follows.data
@@ -96,23 +134,18 @@ private fun FollowingTab(state: Screen.Home, follows: List<FollowedChannel>, act
     val live = channels.filter { it.live != null }.sortedByDescending { it.live?.viewers ?: 0 }
     val offline = channels.filter { it.live == null }.sortedBy { it.username.lowercase() }
 
-    LazyColumn(Modifier.fillMaxSize(), state = state.followsList) {
-        item {
-            TextButton(onClick = { refreshFollows(state, follows, scope) }) {
-                Text(if (state.follows.loading) "Refreshing…" else "↻ Refresh")
-            }
-        }
-        if (data == null && state.follows.loading) item { LoadingBox() }
-        if (live.isNotEmpty()) item { SectionTitle("Live now") }
+    LazyVerticalGrid(GridCells.Adaptive(CARD_MIN_WIDTH), Modifier.fillMaxSize(), state = state.followsList) {
+        if (data == null && state.follows.loading) full { LoadingBox() }
+        if (live.isNotEmpty()) full("h_live") { SectionTitle("Live now") }
         items(live, key = { "live_" + it.slug }) { ch ->
             val l = ch.live!!
             StreamCard(
-                item = com.drzenith.kixtra.data.StreamItem(ch.slug, ch.username, l.title, l.viewers, l.category, l.thumbnail, ch.avatar),
+                item = StreamItem(ch.slug, ch.username, l.title, l.viewers, l.category, l.thumbnail, ch.avatar),
                 onClick = { actions.playLive(ch) },
                 onChannel = { actions.openChannel(ch.slug) },
             )
         }
-        if (offline.isNotEmpty()) item { SectionTitle("Offline") }
+        if (offline.isNotEmpty()) full("h_off") { SectionTitle("Offline") }
         items(offline, key = { "off_" + it.slug }) { ch ->
             ChannelRow(ch.avatar, ch.username, if (ch.followers > 0) "${compact(ch.followers)} followers" else null, false) {
                 actions.openChannel(ch.slug)
@@ -121,75 +154,64 @@ private fun FollowingTab(state: Screen.Home, follows: List<FollowedChannel>, act
     }
 }
 
-private fun loadMoreStreams(state: Screen.Home, scope: CoroutineScope) {
-    if (state.streamsLoading || state.streamsEnd) return
-    state.streamsLoading = true
-    state.streamsError = null
-    scope.launch {
-        try {
-            val page = KickApi.liveStreams(state.streamsCursor)
-            val known = state.streams.map { it.slug }.toSet()
-            state.streams.addAll(page.items.filter { it.slug !in known })
-            state.streamsCursor = page.next
-            if (page.next == null) state.streamsEnd = true
-        } catch (e: Exception) {
-            state.streamsError = e.message ?: "Couldn't load streams"
-        } finally {
-            state.streamsLoading = false
-        }
-    }
+// ---------- Live ----------
+
+private fun loadStreams(state: Screen.Home, scope: CoroutineScope) {
+    val f = state.streamFilters
+    state.streams.loadMore(scope) { cursor -> KickApi.liveStreams(cursor, null, f.language, f.sort) }
 }
 
 @Composable
 private fun LiveTab(state: Screen.Home, actions: Actions, scope: CoroutineScope) {
-    LaunchedEffect(Unit) { if (state.streams.isEmpty()) loadMoreStreams(state, scope) }
-    LazyColumn(Modifier.fillMaxSize(), state = state.streamsList) {
-        items(state.streams, key = { it.slug }) { s ->
+    LaunchedEffect(Unit) { if (state.streams.items.isEmpty()) loadStreams(state, scope) }
+    StreamFilterRow(state.streamFilters) {
+        state.streams.reset()
+        loadStreams(state, scope)
+    }
+    val hide = state.streamFilters.hideMature
+    LazyVerticalGrid(GridCells.Adaptive(CARD_MIN_WIDTH), Modifier.fillMaxSize(), state = state.streamsGrid) {
+        items(state.streams.items.filter { !(hide && it.mature) }, key = { it.slug }) { s ->
             StreamCard(s, onClick = { actions.openLive(s.slug) }, onChannel = { actions.openChannel(s.slug) })
         }
-        item {
-            when {
-                state.streamsError != null -> ErrorBox(state.streamsError!!) { loadMoreStreams(state, scope) }
-                state.streamsLoading -> LoadingBox()
-                !state.streamsEnd && state.streams.isNotEmpty() -> LaunchedEffect(state.streams.size) { loadMoreStreams(state, scope) }
-            }
-        }
+        full { PagedFooter(state.streams, "Nobody is live with these filters") { loadStreams(state, scope) } }
     }
 }
 
-private fun loadMoreCategories(state: Screen.Home, scope: CoroutineScope) {
-    val page = state.categoriesPage?.toIntOrNull() ?: return
-    if (state.categoriesLoading) return
-    state.categoriesLoading = true
-    state.categoriesError = null
-    scope.launch {
-        try {
-            val p = KickApi.categories(page)
-            val known = state.categories.map { it.slug }.toSet()
-            state.categories.addAll(p.items.filter { it.slug !in known })
-            state.categoriesPage = p.next
-        } catch (e: Exception) {
-            state.categoriesError = e.message ?: "Couldn't load categories"
-        } finally {
-            state.categoriesLoading = false
-        }
-    }
+// ---------- Categories ----------
+
+private fun loadCategories(state: Screen.Home, scope: CoroutineScope) {
+    state.categories.loadMore(scope) { cursor -> KickApi.categories(cursor?.toIntOrNull() ?: 1) }
 }
 
 @Composable
 private fun CategoriesTab(state: Screen.Home, actions: Actions, scope: CoroutineScope) {
-    LaunchedEffect(Unit) { if (state.categories.isEmpty()) loadMoreCategories(state, scope) }
+    LaunchedEffect(Unit) { if (state.categories.items.isEmpty()) loadCategories(state, scope) }
     LazyVerticalGrid(GridCells.Adaptive(110.dp), Modifier.fillMaxSize(), state = state.categoriesGrid) {
-        items(state.categories, key = { it.slug }) { c ->
+        items(state.categories.items, key = { it.slug }) { c ->
             CategoryCard(c) { actions.openCategory(c.slug, c.name, c.id) }
         }
-        item(span = { GridItemSpan(maxLineSpan) }) {
-            when {
-                state.categoriesError != null -> ErrorBox(state.categoriesError!!) { loadMoreCategories(state, scope) }
-                state.categoriesLoading -> LoadingBox()
-                state.categoriesPage != null && state.categories.isNotEmpty() ->
-                    LaunchedEffect(state.categories.size) { loadMoreCategories(state, scope) }
-            }
+        full { PagedFooter(state.categories, "No categories") { loadCategories(state, scope) } }
+    }
+}
+
+// ---------- Clips ----------
+
+private fun loadClips(state: Screen.Home, scope: CoroutineScope) {
+    val f = state.clipFilters
+    state.clips.loadMore(scope) { cursor -> KickApi.topClips(f.sort, f.time, cursor) }
+}
+
+@Composable
+private fun ClipsTab(state: Screen.Home, actions: Actions, scope: CoroutineScope) {
+    LaunchedEffect(Unit) { if (state.clips.items.isEmpty()) loadClips(state, scope) }
+    ClipFilterRow(state.clipFilters) {
+        state.clips.reset()
+        loadClips(state, scope)
+    }
+    LazyVerticalGrid(GridCells.Adaptive(CARD_MIN_WIDTH), Modifier.fillMaxSize(), state = state.clipsGrid) {
+        items(state.clips.items, key = { it.id }) { c ->
+            ClipCard(c, onClick = { actions.playClip(c) }, onChannel = { actions.openChannel(c.channelSlug) })
         }
+        full { PagedFooter(state.clips, "No clips") { loadClips(state, scope) } }
     }
 }

@@ -14,8 +14,12 @@ import androidx.media3.common.Player
 import androidx.media3.common.TrackGroup
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
+import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import com.drzenith.kixtra.data.Channel
+import com.drzenith.kixtra.data.Clip
 import com.drzenith.kixtra.data.Store
 import com.drzenith.kixtra.data.Video
 import com.drzenith.kixtra.net.KickApi
@@ -40,6 +44,11 @@ sealed class Playable {
      * ("watch from start"); Kick serves it as a playlist that keeps getting longer.
      */
     data class Vod(override val channel: Channel, val video: Video, val dvr: Boolean = false) : Playable()
+
+    data class ClipItem(override val channel: Channel, val clip: Clip) : Playable()
+
+    /** VODs and clips get the speed control; live streams don't. */
+    val seekable: Boolean get() = this !is Live
 }
 
 data class Quality(val label: String, val height: Int, val fps: Int, val group: TrackGroup, val index: Int)
@@ -52,7 +61,25 @@ class PlayerController(context: Context, private val store: Store) {
     private val tag = "PlayerController"
     private val scope = MainScope()
 
-    val player: ExoPlayer = ExoPlayer.Builder(context)
+    // Software-first decoder ordering when enabled (read each time a decoder is picked).
+    private val codecSelector = MediaCodecSelector { mime, secure, tunneling ->
+        val infos = MediaCodecSelector.DEFAULT.getDecoderInfos(mime, secure, tunneling)
+        if (store.softwareDecoding) infos.sortedBy { !it.softwareOnly } else infos
+    }
+
+    val player: ExoPlayer = ExoPlayer.Builder(
+        context,
+        DefaultRenderersFactory(context)
+            .setEnableDecoderFallback(true)
+            .setMediaCodecSelector(codecSelector),
+    )
+        // Time-based buffer (not capped by bytes) so high bitrates at 2-4x keep enough runway; 60s max keeps memory sane.
+        .setLoadControl(
+            DefaultLoadControl.Builder()
+                .setBufferDurationsMs(30_000, 60_000, 2_000, 3_000)
+                .setPrioritizeTimeOverSizeThresholds(true)
+                .build()
+        )
         .setAudioAttributes(
             AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(),
             true,
@@ -64,6 +91,8 @@ class PlayerController(context: Context, private val store: Store) {
 
     val current = MutableStateFlow<Playable?>(null)
     val error = MutableStateFlow<String?>(null)
+    /** One-off informational message for the player UI. */
+    val notice = MutableStateFlow<String?>(null)
     val loading = MutableStateFlow(false)
     val speed = MutableStateFlow(1f)
     val qualities = MutableStateFlow<List<Quality>>(emptyList())
@@ -84,7 +113,7 @@ class PlayerController(context: Context, private val store: Store) {
 
             override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
                 speed.value = playbackParameters.speed
-                if (current.value is Playable.Vod) store.vodSpeed = playbackParameters.speed
+                if (current.value?.seekable == true) store.vodSpeed = playbackParameters.speed
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -99,8 +128,21 @@ class PlayerController(context: Context, private val store: Store) {
                     player.prepare()
                     return
                 }
+                val decoderError = e.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
+                    e.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
+                    e.errorCode == PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED ||
+                    e.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES ||
+                    e.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED
+                if (decoderError && !store.softwareDecoding) {
+                    // Hardware decoder failed (common on Waydroid/emulators): switch to software and resume.
+                    store.softwareDecoding = true
+                    notice.value = "Hardware decoder failed, switched to software decoding (change in Settings)"
+                    val pos = if (p != null && p.seekable) player.currentPosition else null
+                    if (p != null) load(p, pos)
+                    return
+                }
                 // Signed playlist URLs expire; for VODs try once more with a fresh URL.
-                if (p is Playable.Vod && System.currentTimeMillis() - lastRefreshAt > 20_000) {
+                if (p != null && !decoderError && System.currentTimeMillis() - lastRefreshAt > 20_000) {
                     reload(keepPosition = true)
                 } else {
                     error.value = "Playback error: ${e.errorCodeName}"
@@ -116,7 +158,7 @@ class PlayerController(context: Context, private val store: Store) {
         }
     }
 
-    fun isVod() = current.value is Playable.Vod
+    fun isVod() = current.value?.seekable == true
 
     private var resolveJob: Job? = null
 
@@ -180,6 +222,10 @@ class PlayerController(context: Context, private val store: Store) {
                         }
                         metaTitle = p.video.title
                     }
+                    is Playable.ClipItem -> {
+                        url = KickApi.clipUrl(p.clip)
+                        metaTitle = p.clip.title
+                    }
                 }
                 lastRefreshAt = System.currentTimeMillis()
                 val meta = MediaMetadata.Builder()
@@ -189,9 +235,13 @@ class PlayerController(context: Context, private val store: Store) {
                     .build()
                 val builder = MediaItem.Builder()
                     .setUri(url)
-                    .setMimeType(MimeTypes.APPLICATION_M3U8)
                     .setMediaMetadata(meta)
-                if (p is Playable.Vod) {
+                // Clips can be plain MP4; everything else is HLS.
+                if (p !is Playable.ClipItem || url.contains(".m3u8")) builder.setMimeType(MimeTypes.APPLICATION_M3U8)
+                if (p is Playable.ClipItem) {
+                    player.setMediaItem(builder.build(), startPositionMs ?: 0L)
+                    player.setPlaybackSpeed(store.vodSpeed)
+                } else if (p is Playable.Vod) {
                     // A growing VOD is a "live" playlist to ExoPlayer. Stop it from nudging the
                     // speed towards the live edge; the user's speed always wins.
                     builder.setLiveConfiguration(

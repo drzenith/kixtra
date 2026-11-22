@@ -8,14 +8,20 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -28,6 +34,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.drzenith.kixtra.data.Channel
+import com.drzenith.kixtra.data.StreamItem
 import com.drzenith.kixtra.net.KickApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -57,6 +64,11 @@ private fun loadChannel(state: Screen.ChannelPage, scope: CoroutineScope) {
     }
 }
 
+private fun loadClips(state: Screen.ChannelPage, ch: Channel, scope: CoroutineScope) {
+    val f = state.clipFilters
+    state.clips.loadMore(scope) { cursor -> KickApi.channelClips(ch, f.sort, f.time, cursor) }
+}
+
 @Composable
 fun ChannelScreen(state: Screen.ChannelPage, actions: Actions) {
     val scope = rememberCoroutineScope()
@@ -78,27 +90,23 @@ fun ChannelScreen(state: Screen.ChannelPage, actions: Actions) {
     }
 
     Column(Modifier.fillMaxSize()) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = { actions.back() }) { Text("←") }
-            Text(ch?.username ?: state.slug, fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.weight(1f))
-            TextButton(onClick = { loadChannel(state, scope) }) { Text("↻") }
+        BackBar(ch?.username ?: state.slug, onBack = { actions.back() }) {
+            IconButton(onClick = {
+                loadChannel(state, scope)
+                state.clips.reset()
+            }) { Icon(Icons.Filled.Refresh, contentDescription = "Refresh") }
         }
-        LazyColumn(Modifier.fillMaxSize(), state = state.list) {
-            if (ch == null) {
-                item {
-                    when {
-                        state.channel.error != null -> ErrorBox(state.channel.error!!) { loadChannel(state, scope) }
-                        else -> LoadingBox()
-                    }
-                }
-                return@LazyColumn
-            }
-            item { Header(ch, follows.any { it.slug.equals(ch.slug, true) }, actions) }
+        if (ch == null) {
+            if (state.channel.error != null) ErrorBox(state.channel.error ?: "") { loadChannel(state, scope) } else LoadingBox()
+            return@Column
+        }
+        LazyVerticalGrid(GridCells.Adaptive(360.dp), Modifier.fillMaxSize(), state = state.grid) {
+            full("header") { Header(ch, follows.any { it.slug.equals(ch.slug, true) }, actions) }
             ch.live?.let { live ->
-                item {
+                full("live") {
                     Column(Modifier.padding(top = 4.dp)) {
                         StreamCard(
-                            com.drzenith.kixtra.data.StreamItem(ch.slug, ch.username, live.title, live.viewers, live.category, live.thumbnail, ch.avatar),
+                            StreamItem(ch.slug, ch.username, live.title, live.viewers, live.category, live.thumbnail, ch.avatar),
                             onClick = { actions.playLive(ch) },
                             onChannel = {},
                         )
@@ -109,16 +117,34 @@ fun ChannelScreen(state: Screen.ChannelPage, actions: Actions) {
                     }
                 }
             }
-            item { SectionTitle("Videos") }
-            when {
-                videos != null && videos.isEmpty() -> item { EmptyBox("No videos") }
-                videos != null -> itemsIndexed(videos, key = { i, v -> "${v.key}_$i" }) { _, v ->
-                    VideoCard(v, actions.store.position(v.key)) {
-                        if (v.isLive && ch.live != null) actions.watchFromStart(ch) else actions.playVod(ch, v)
+            full("tabs") {
+                TabRow(selectedTabIndex = state.tab) {
+                    Tab(selected = state.tab == 0, onClick = { state.tab = 0 }, text = { Text("Videos") })
+                    Tab(selected = state.tab == 1, onClick = { state.tab = 1 }, text = { Text("Clips") })
+                }
+            }
+            if (state.tab == 0) {
+                when {
+                    videos != null && videos.isEmpty() -> full { EmptyBox("No videos") }
+                    videos != null -> itemsIndexed(videos, key = { i, v -> "v_${v.key}_$i" }) { _, v ->
+                        VideoCard(v, actions.store.position(v.key)) {
+                            if (v.isLive && ch.live != null) actions.watchFromStart(ch) else actions.playVod(ch, v)
+                        }
+                    }
+                    state.videos.error != null -> full { ErrorBox(state.videos.error ?: "") { loadChannel(state, scope) } }
+                    else -> full { LoadingBox() }
+                }
+            } else {
+                full("clipfilters") {
+                    ClipFilterRow(state.clipFilters) {
+                        state.clips.reset()
+                        loadClips(state, ch, scope)
                     }
                 }
-                state.videos.error != null -> item { ErrorBox(state.videos.error!!) { loadChannel(state, scope) } }
-                else -> item { LoadingBox() }
+                items(state.clips.items, key = { "clip_" + it.id }) { c ->
+                    ClipCard(c, onClick = { actions.playClip(c) }, onChannel = {})
+                }
+                full("clipfooter") { PagedFooter(state.clips, "No clips") { loadClips(state, ch, scope) } }
             }
         }
     }
@@ -132,7 +158,7 @@ private fun Header(ch: Channel, followed: Boolean, actions: Actions) {
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(ch.username, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                    Text(ch.username, fontWeight = FontWeight.Bold, fontSize = 20.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     if (ch.verified) Text("  ✓", color = KickGreen, fontWeight = FontWeight.Bold)
                 }
                 if (ch.followers > 0) {
@@ -142,10 +168,7 @@ private fun Header(ch: Channel, followed: Boolean, actions: Actions) {
             if (followed) {
                 OutlinedButton(onClick = { actions.toggleFollow(ch.slug, ch.username, ch.avatar) }) { Text("Following") }
             } else {
-                Button(
-                    onClick = { actions.toggleFollow(ch.slug, ch.username, ch.avatar) },
-                    colors = ButtonDefaults.buttonColors(),
-                ) { Text("Follow") }
+                Button(onClick = { actions.toggleFollow(ch.slug, ch.username, ch.avatar) }) { Text("Follow") }
             }
         }
         ch.bio?.let {

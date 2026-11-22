@@ -2,6 +2,27 @@ package com.drzenith.kixtra.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import com.drzenith.kixtra.data.Clip
+import com.drzenith.kixtra.net.KickApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -224,3 +245,171 @@ fun ChannelRow(avatar: String?, name: String, subtitle: String?, live: Boolean, 
 fun SectionTitle(text: String) {
     Text(text, fontWeight = FontWeight.Bold, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
 }
+
+// ---------- Top bars ----------
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun BackBar(title: String, onBack: () -> Unit, actions: @Composable RowScope.() -> Unit = {}) {
+    TopAppBar(
+        title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        navigationIcon = {
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
+        },
+        actions = actions,
+    )
+}
+
+// ---------- Filters ----------
+
+fun languageName(code: String): String {
+    if (code.isBlank()) return "Any language"
+    val name = Locale.forLanguageTag(code).getDisplayLanguage(Locale.getDefault())
+    return if (name.isNullOrBlank() || name == code) code.uppercase() else name
+}
+
+/** Kick's list of stream language codes, fetched once. */
+object Languages {
+    val codes = mutableStateListOf<String>().apply { addAll(KickApi.DEFAULT_LANGUAGES) }
+    private var loaded = false
+
+    suspend fun ensureLoaded() {
+        if (loaded) return
+        loaded = true
+        val fresh = KickApi.languageCodes()
+        codes.clear()
+        codes.addAll(fresh.sortedBy { languageName(it) })
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ChipMenu(label: String, options: List<Pair<String, String>>, selected: String, onSelect: (String) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        FilterChip(
+            selected = false,
+            onClick = { open = true },
+            label = { Text("$label ▾", maxLines = 1) },
+        )
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            options.forEach { (value, text) ->
+                DropdownMenuItem(
+                    text = { Text(text, fontWeight = if (value == selected) FontWeight.Bold else FontWeight.Normal) },
+                    leadingIcon = if (value == selected) ({ Icon(Icons.Filled.Check, contentDescription = null) }) else null,
+                    onClick = { open = false; onSelect(value) },
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ToggleChip(label: String, selected: Boolean, onToggle: () -> Unit) {
+    FilterChip(
+        selected = selected,
+        onClick = onToggle,
+        label = { Text(label) },
+        leadingIcon = if (selected) ({ Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(18.dp)) }) else null,
+    )
+}
+
+@Composable
+fun FilterRow(content: @Composable RowScope.() -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        content = content,
+    )
+}
+
+@Composable
+fun LanguageChip(selected: String, onSelect: (String) -> Unit) {
+    LaunchedEffect(Unit) { Languages.ensureLoaded() }
+    ChipMenu(
+        languageName(selected),
+        listOf("" to "Any language") + Languages.codes.map { it to languageName(it) },
+        selected,
+        onSelect,
+    )
+}
+
+@Composable
+fun StreamFilterRow(filters: StreamFilters, onChanged: () -> Unit) {
+    FilterRow {
+        LanguageChip(filters.language) { filters.language = it; onChanged() }
+        ChipMenu(
+            if (filters.sort == "featured") "Featured" else "Most viewers",
+            listOf("viewer_count_desc" to "Most viewers", "featured" to "Featured"),
+            filters.sort,
+        ) { filters.sort = it; onChanged() }
+        ToggleChip("Hide 18+", filters.hideMature) { filters.hideMature = !filters.hideMature }
+    }
+}
+
+private val TIME_LABELS = listOf("day" to "Today", "week" to "This week", "month" to "This month", "all" to "All time")
+
+@Composable
+fun ClipFilterRow(filters: ClipFilters, onChanged: () -> Unit) {
+    FilterRow {
+        ChipMenu(
+            if (filters.sort == "date") "Newest" else "Most viewed",
+            listOf("view" to "Most viewed", "date" to "Newest"),
+            filters.sort,
+        ) { filters.sort = it; onChanged() }
+        ChipMenu(
+            TIME_LABELS.firstOrNull { it.first == filters.time }?.second ?: "This week",
+            TIME_LABELS,
+            filters.time,
+        ) { filters.time = it; onChanged() }
+    }
+}
+
+// ---------- Clips ----------
+
+@Composable
+fun ClipCard(clip: Clip, onClick: () -> Unit, onChannel: () -> Unit) {
+    Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 8.dp)) {
+        Thumb(clip.thumbnail) {
+            Box(Modifier.fillMaxSize().padding(6.dp)) {
+                if (clip.durationMs > 0) {
+                    Badge(hms(clip.durationMs), Color(0xCC000000), modifier = Modifier.align(Alignment.BottomEnd))
+                }
+                if (clip.views > 0) {
+                    Badge("${compact(clip.views)} views", Color(0xCC000000), modifier = Modifier.align(Alignment.TopStart))
+                }
+            }
+        }
+        Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.Top) {
+            Box(Modifier.clickable(onClick = onChannel)) { Avatar(clip.channelAvatar, 36) }
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(clip.title, maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
+                Text(
+                    listOfNotNull(clip.channelName, ago(clip.createdAt).ifBlank { null }).joinToString(" • "),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp,
+                    modifier = Modifier.clickable(onClick = onChannel),
+                )
+                clip.category?.let { Text(it, color = KickGreen, fontSize = 12.sp) }
+            }
+        }
+    }
+}
+
+// ---------- Paging ----------
+
+/** Footer for a paged grid: spinner, error with retry, or an auto-trigger for the next page. */
+@Composable
+fun <T> PagedFooter(paged: Paged<T>, emptyText: String, load: () -> Unit) {
+    when {
+        paged.error != null -> ErrorBox(paged.error ?: "") { load() }
+        paged.loading -> LoadingBox()
+        paged.end && paged.items.isEmpty() -> EmptyBox(emptyText)
+        !paged.end -> LaunchedEffect(paged.items.size) { load() }
+    }
+}
+
+/** Grid cell width used for stream/clip cards: 1 column on phones, more on wide screens. */
+val CARD_MIN_WIDTH = 320.dp

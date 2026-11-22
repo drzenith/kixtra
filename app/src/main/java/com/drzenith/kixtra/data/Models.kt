@@ -32,6 +32,23 @@ data class StreamItem(
     val category: String?,
     val thumbnail: String?,
     val avatar: String?,
+    val language: String? = null,
+    val mature: Boolean = false,
+)
+
+data class Clip(
+    val id: String,
+    val title: String,
+    val url: String?,
+    val thumbnail: String?,
+    val durationMs: Long,
+    val views: Long,
+    val createdAt: String?,
+    val category: String?,
+    val channelId: Long,
+    val channelSlug: String,
+    val channelName: String,
+    val channelAvatar: String?,
 )
 
 data class Category(

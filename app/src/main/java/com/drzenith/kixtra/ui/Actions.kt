@@ -1,6 +1,7 @@
 package com.drzenith.kixtra.ui
 
 import com.drzenith.kixtra.data.Channel
+import com.drzenith.kixtra.data.Clip
 import com.drzenith.kixtra.data.FollowedChannel
 import com.drzenith.kixtra.data.Store
 import com.drzenith.kixtra.data.Video
@@ -27,6 +28,31 @@ class Actions(val nav: Navigator, val player: PlayerController, val store: Store
     fun playVod(channel: Channel, video: Video) {
         player.play(Playable.Vod(channel, video))
         nav.push(Screen.Player())
+    }
+
+    fun playClip(clip: Clip) {
+        val channel = Channel(
+            id = clip.channelId,
+            slug = clip.channelSlug,
+            username = clip.channelName,
+            avatar = clip.channelAvatar,
+            bio = null,
+            followers = 0,
+            verified = false,
+            chatroomId = null,
+            live = null,
+        )
+        player.play(Playable.ClipItem(channel, clip))
+        nav.push(Screen.Player())
+    }
+
+    /** New default language: save it and apply it to the home Live tab. */
+    fun setDefaultLanguage(code: String) {
+        store.defaultLanguage = code
+        (nav.stack.firstOrNull() as? Screen.Home)?.let { home ->
+            home.streamFilters.language = code
+            home.streams.reset()
+        }
     }
 
     /** Start the growing VOD of the current live stream from the beginning. */

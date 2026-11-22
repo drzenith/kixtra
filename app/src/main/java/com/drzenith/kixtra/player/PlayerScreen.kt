@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.os.Build
 import android.view.View
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -74,6 +75,9 @@ import com.drzenith.kixtra.ui.compact
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+/** Wide, tall-enough windows (tablets, desktop/Waydroid) get the side-by-side player layout. */
+fun isWideWindow(cfg: Configuration): Boolean = cfg.screenWidthDp >= 840 && cfg.screenHeightDp >= 480
+
 private val SPEEDS = listOf(0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f, 2.5f, 3f, 3.5f, 4f)
 
 fun speedLabel(s: Float): String = if (s % 1f == 0f) "${s.toInt()}x" else "${s}x"
@@ -92,10 +96,23 @@ fun PlayerScreen(actions: Actions, inPip: Boolean) {
     val error by pc.error.collectAsState()
     val context = LocalContext.current
     val activity = context.findActivity()
-    val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val cfg = LocalConfiguration.current
+    val landscape = cfg.orientation == Configuration.ORIENTATION_LANDSCAPE
+    // Tablets / desktop-sized windows (e.g. Waydroid): video + chat side by side instead of fullscreen.
+    val wide = isWideWindow(cfg)
     val scope = rememberCoroutineScope()
     var chatInLandscape by remember { mutableStateOf(false) }
     var controlsVisible by remember { mutableStateOf(true) }
+    var forceFullscreen by remember { mutableStateOf(false) }
+    val fullscreen = (landscape && !wide) || forceFullscreen
+    val notice by pc.notice.collectAsState()
+    LaunchedEffect(notice) {
+        if (notice != null) {
+            delay(6000)
+            pc.notice.value = null
+        }
+    }
+    BackHandler(enabled = forceFullscreen) { forceFullscreen = false }
 
     // Ask once for notification permission so background playback shows its controls.
     val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
@@ -109,11 +126,11 @@ fun PlayerScreen(actions: Actions, inPip: Boolean) {
     }
 
     // Immersive in landscape; restore orientation + bars when leaving the player.
-    DisposableEffect(landscape, inPip) {
+    DisposableEffect(fullscreen, inPip) {
         val window = activity?.window
         if (window != null) {
             val ctl = WindowCompat.getInsetsController(window, window.decorView)
-            if (landscape || inPip) {
+            if (fullscreen || inPip) {
                 ctl.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
                 ctl.hide(WindowInsetsCompat.Type.systemBars())
             } else {
@@ -132,6 +149,10 @@ fun PlayerScreen(actions: Actions, inPip: Boolean) {
     }
 
     fun setFullscreen(full: Boolean) {
+        if (wide) {
+            forceFullscreen = full
+            return
+        }
         val a = activity ?: return
         if (full) {
             a.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
@@ -153,6 +174,7 @@ fun PlayerScreen(actions: Actions, inPip: Boolean) {
             is Playable.Vod -> parseKickTime(p.video.startTime)?.let { start ->
                 ReplayChat(p.channel.id, start, scope) { pc.player.currentPosition }
             }
+            is Playable.ClipItem -> null
         }
     }
     DisposableEffect(chat) {
@@ -167,7 +189,7 @@ fun PlayerScreen(actions: Actions, inPip: Boolean) {
 
     val video: @Composable (Modifier) -> Unit = { m ->
         Box(m.background(Color.Black)) {
-            VideoBox(pc.player, Modifier.fillMaxSize(), true, landscape, ::setFullscreen) { controlsVisible = it }
+            VideoBox(pc.player, Modifier.fillMaxSize(), true, fullscreen, ::setFullscreen) { controlsVisible = it }
             when {
                 loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
                 error != null -> Column(Modifier.align(Alignment.Center).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -176,7 +198,16 @@ fun PlayerScreen(actions: Actions, inPip: Boolean) {
                     Button(onClick = { pc.reload(keepPosition = true) }) { Text("Retry") }
                 }
             }
-            if (landscape && controlsVisible) {
+            notice?.let { msg ->
+                Text(
+                    msg,
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 56.dp)
+                        .background(Color(0xCC000000)).padding(horizontal = 10.dp, vertical = 6.dp),
+                )
+            }
+            if (fullscreen && controlsVisible) {
                 Row(
                     Modifier.align(Alignment.TopEnd).padding(8.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -193,11 +224,21 @@ fun PlayerScreen(actions: Actions, inPip: Boolean) {
     val chatMessages = chat?.messages?.collectAsState()
     val chatStatus = chat?.status?.collectAsState()
 
-    if (landscape) {
+    if (fullscreen) {
         Row(Modifier.fillMaxSize().background(Color.Black)) {
             video(Modifier.weight(1f).fillMaxHeight())
             if (chat != null && chatInLandscape) {
                 ChatView(chatMessages?.value ?: emptyList(), chatStatus?.value ?: "", Modifier.width(300.dp).fillMaxHeight())
+            }
+        }
+    } else if (wide) {
+        Row(Modifier.fillMaxSize()) {
+            Column(Modifier.weight(1f).fillMaxHeight()) {
+                video(Modifier.fillMaxWidth().weight(1f))
+                InfoBar(actions)
+            }
+            if (chat != null) {
+                ChatView(chatMessages?.value ?: emptyList(), chatStatus?.value ?: "", Modifier.width(340.dp).fillMaxHeight())
             }
         }
     } else {
@@ -233,6 +274,8 @@ private fun VideoBox(
                 setShowSubtitleButton(false)
                 setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
                 setFullscreenButtonClickListener { isFull -> fs(isFull) }
+                // Media3's settings cog duplicates our speed/quality menus (and caps speed at 2x).
+                findViewById<View>(androidx.media3.ui.R.id.exo_settings)?.visibility = View.GONE
                 setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { v -> ctl(v == View.VISIBLE) })
             }
         },
@@ -253,6 +296,7 @@ private fun InfoBar(actions: Actions) {
     val title = when (p) {
         is Playable.Live -> ch.live?.title ?: ""
         is Playable.Vod -> p.video.title
+        is Playable.ClipItem -> p.clip.title
     }
     Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -268,6 +312,7 @@ private fun InfoBar(actions: Actions) {
                         p is Playable.Live -> Badge("LIVE • ${compact(ch.live?.viewers ?: 0)}", LiveRed)
                         p is Playable.Vod && p.dvr -> Badge("FROM START", KickGreen, Color.Black)
                         p is Playable.Vod && p.video.isLive -> Badge("LIVE VOD", KickGreen, Color.Black)
+                        p is Playable.ClipItem -> Badge("CLIP", Color(0xFF3A3D41))
                     }
                 }
             }
@@ -299,7 +344,7 @@ private fun PlaybackButtons(actions: Actions, compactMode: Boolean) {
     }
     MenuButton(if (compactMode) selectedQ else "Quality: $selectedQ", qOptions, selectedQ)
 
-    if (p is Playable.Vod) {
+    if (p.seekable) {
         MenuButton(
             if (compactMode) speedLabel(speed) else "Speed: ${speedLabel(speed)}",
             SPEEDS.map { s -> speedLabel(s) to { pc.setSpeed(s) } },

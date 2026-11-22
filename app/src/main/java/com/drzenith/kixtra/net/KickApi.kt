@@ -4,6 +4,7 @@ import android.util.Log
 import com.drzenith.kixtra.data.Category
 import com.drzenith.kixtra.data.Channel
 import com.drzenith.kixtra.data.ChannelHit
+import com.drzenith.kixtra.data.Clip
 import com.drzenith.kixtra.data.LiveInfo
 import com.drzenith.kixtra.data.Page
 import com.drzenith.kixtra.data.SearchResults
@@ -130,13 +131,22 @@ object KickApi {
             category = cat.s("name"),
             thumbnail = imageUrl(ls["thumbnail"]),
             avatar = ch.s("profile_picture") ?: ch.s("profile_pic") ?: ch.o("user").s("profile_pic"),
+            language = ls.s("language") ?: ls.s("lang_iso"),
+            mature = ls.b("is_mature") ?: false,
         )
     }
 
-    suspend fun liveStreams(cursor: String?, categoryId: Long? = null): Page<StreamItem> {
+    /** sort: "viewer_count_desc" or "featured". language: Kick language code or null for any. */
+    suspend fun liveStreams(
+        cursor: String?,
+        categoryId: Long? = null,
+        language: String? = null,
+        sort: String = "viewer_count_desc",
+    ): Page<StreamItem> {
         val q = buildString {
-            append("limit=24&sort=viewer_count_desc")
+            append("limit=24&sort=${enc(sort)}")
             if (categoryId != null) append("&category_id=$categoryId")
+            if (!language.isNullOrBlank()) append("&language=${enc(language)}")
             if (cursor != null) append("&after=${enc(cursor)}")
         }
         val o = Http.getJson("https://web.kick.com/api/v1/livestreams?$q").obj()
@@ -166,6 +176,79 @@ object KickApi {
 
     suspend fun category(slug: String): Category? =
         Http.getJson("https://kick.com/api/v1/subcategories/${enc(slug)}").obj()?.let(::parseCategory)
+
+    /** Language codes Kick streams can be tagged with (e.g. "en", "es"). */
+    suspend fun languageCodes(): List<String> = runCatching {
+        Http.getJson("https://web.kick.com/api/v1/livestreams/language-codes").obj().a("data")
+            ?.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.takeIf { c -> c.isNotBlank() } }
+    }.getOrNull()?.takeIf { it.isNotEmpty() } ?: DEFAULT_LANGUAGES
+
+    val DEFAULT_LANGUAGES = listOf(
+        "en", "es", "pt", "fr", "de", "it", "tr", "ar", "ru", "pl", "nl", "sv", "ja", "ko", "zh", "hi", "id", "vi", "th", "fil",
+    )
+
+    // ---------- Clips ----------
+
+    private fun parseClip(o: JsonObject, fallbackChannel: Channel? = null): Clip? {
+        val id = o.s("id") ?: return null
+        val ch = o.o("channel") ?: o.o("creator")
+        val slug = ch.s("slug") ?: fallbackChannel?.slug ?: return null
+        return Clip(
+            id = id,
+            title = o.s("title") ?: "Clip",
+            url = o.s("clip_url") ?: o.s("playback_url") ?: o.s("video_url"),
+            thumbnail = o.s("thumbnail_url") ?: imageUrl(o["thumbnail"]),
+            durationMs = ((o.s("duration")?.toDoubleOrNull() ?: 0.0) * 1000).toLong(),
+            views = o.l("views") ?: o.l("view_count") ?: o.l("views_count") ?: 0,
+            createdAt = o.s("created_at"),
+            category = o.o("category").s("name"),
+            channelId = ch.l("id") ?: fallbackChannel?.id ?: 0,
+            channelSlug = slug,
+            channelName = ch.s("username") ?: ch.o("user").s("username") ?: fallbackChannel?.username ?: slug,
+            channelAvatar = ch.s("profile_picture") ?: ch.s("profile_pic") ?: ch.s("profilepic")
+                ?: ch.o("user").s("profile_pic") ?: fallbackChannel?.avatar,
+        )
+    }
+
+    private fun clipPage(el: kotlinx.serialization.json.JsonElement, fallbackChannel: Channel? = null): Page<Clip> {
+        val o = el.obj()
+        val data = o.o("data")
+        val list = o.a("clips") ?: data.a("clips") ?: o.a("data") ?: el.arr()
+        val items = list.objects().mapNotNull { parseClip(it, fallbackChannel) }.distinctBy { it.id }
+        val next = o.s("nextCursor") ?: o.s("next_cursor") ?: o.s("cursor") ?: data.s("cursor")
+            ?: data.s("next_cursor") ?: o.o("pagination").s("next_cursor")
+        return Page(items, next?.takeIf { items.isNotEmpty() })
+    }
+
+    /** sort: "view" or "date"; time: "day", "week", "month", "all". */
+    suspend fun topClips(sort: String, time: String, cursor: String?): Page<Clip> {
+        val c = if (cursor != null) "&cursor=${enc(cursor)}" else ""
+        return clipPage(Http.getJson("https://kick.com/api/v2/clips?sort=$sort&time=$time$c"))
+    }
+
+    suspend fun categoryClips(slug: String, sort: String, time: String, cursor: String?): Page<Clip> {
+        val c = if (cursor != null) "&cursor=${enc(cursor)}" else ""
+        return clipPage(Http.getJson("https://kick.com/api/v2/categories/${enc(slug)}/clips?sort=$sort&time=$time$c"))
+    }
+
+    suspend fun channelClips(channel: Channel, sort: String, time: String, cursor: String?): Page<Clip> {
+        val c = if (cursor != null) "&cursor=${enc(cursor)}" else ""
+        // web.kick.com uses "views"; kick.com/api/v2 uses "view".
+        val webSort = if (sort == "view") "views" else sort
+        return runCatching {
+            clipPage(Http.getJson("https://web.kick.com/api/v1/channels/${channel.id}/clips?sort=$webSort&time=$time$c"), channel)
+        }.getOrElse {
+            clipPage(Http.getJson("https://kick.com/api/v2/channels/${enc(channel.slug)}/clips?sort=$sort&time=$time$c"), channel)
+        }
+    }
+
+    /** Fresh playable URL for a clip. */
+    suspend fun clipUrl(clip: Clip): String {
+        val o = runCatching { Http.getJson("https://kick.com/api/v2/clips/${enc(clip.id)}").obj() }.getOrNull()
+        val c = o.o("clip") ?: o
+        return c.s("clip_url") ?: c.s("playback_url") ?: c.s("video_url") ?: clip.url
+            ?: throw ApiException(0, "Couldn't get this clip")
+    }
 
     // ---------- Search ----------
 

@@ -28,6 +28,7 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.drzenith.kixtra.player.PlaybackService
 import com.drzenith.kixtra.player.PlayerScreen
+import com.drzenith.kixtra.player.isWideWindow
 import com.drzenith.kixtra.ui.Actions
 import com.drzenith.kixtra.ui.CategoryScreen
 import com.drzenith.kixtra.ui.ChannelScreen
@@ -70,16 +71,18 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun Root() {
         val top = nav.top
-        val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+        val cfg = LocalConfiguration.current
+        val landscape = cfg.orientation == Configuration.ORIENTATION_LANDSCAPE
+        val phoneFullscreen = landscape && !isWideWindow(cfg)
         BackHandler(enabled = true) {
-            if (top is Screen.Player && landscape) {
+            if (top is Screen.Player && phoneFullscreen) {
                 requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             } else if (!actions.back()) {
                 finish()
             }
         }
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            val fullBleed = top is Screen.Player && (landscape || inPip.value)
+            val fullBleed = top is Screen.Player && (phoneFullscreen || inPip.value)
             Box(if (fullBleed) Modifier.fillMaxSize() else Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
                 when (top) {
                     is Screen.Home -> HomeScreen(top, actions)
