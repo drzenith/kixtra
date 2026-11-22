@@ -95,6 +95,7 @@ class PlayerController(context: Context, private val store: Store) {
     val notice = MutableStateFlow<String?>(null)
     val loading = MutableStateFlow(false)
     val speed = MutableStateFlow(1f)
+    val isPlaying = MutableStateFlow(false)
     val qualities = MutableStateFlow<List<Quality>>(emptyList())
 
     /** "Auto", "Audio only" or a quality label. */
@@ -110,6 +111,10 @@ class PlayerController(context: Context, private val store: Store) {
     init {
         player.addListener(object : Player.Listener {
             override fun onTracksChanged(tracks: Tracks) = rebuildQualities(tracks)
+
+            override fun onIsPlayingChanged(playing: Boolean) {
+                isPlaying.value = playing
+            }
 
             override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
                 speed.value = playbackParameters.speed
@@ -189,12 +194,50 @@ class PlayerController(context: Context, private val store: Store) {
         }
     }
 
-    fun play(p: Playable) {
+    /** [startAtMs] overrides the saved resume position (VODs only). */
+    fun play(p: Playable, startAtMs: Long? = null) {
         saveProgress()
         current.value = p
         error.value = null
         qualities.value = emptyList()
-        load(p, startPositionMs = null)
+        load(p, startPositionMs = startAtMs)
+    }
+
+    /** Plays the VOD a clip was cut from, starting where the clip starts. */
+    fun playClipSource(clip: Clip) {
+        resolveJob?.cancel()
+        saveProgress()
+        loadJob?.cancel()
+        player.stop()
+        current.value = null
+        error.value = null
+        loading.value = true
+        resolveJob = scope.launch {
+            try {
+                val src = KickApi.clipSource(clip)
+                when {
+                    src == null -> {
+                        error.value = "Couldn't find the VOD this clip is from (it may have been deleted)"
+                        loading.value = false
+                    }
+                    src.dvr -> {
+                        val v = com.drzenith.kixtra.ui.Actions.dvrVideo(src.channel)
+                        if (v == null) {
+                            error.value = "Couldn't find the VOD this clip is from"
+                            loading.value = false
+                        } else {
+                            play(Playable.Vod(src.channel, v, dvr = true), src.offsetMs)
+                        }
+                    }
+                    else -> play(Playable.Vod(src.channel, src.video!!), src.offsetMs)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                error.value = e.message ?: "Couldn't load the VOD"
+                loading.value = false
+            }
+        }
     }
 
     private fun load(p: Playable, startPositionMs: Long?) {

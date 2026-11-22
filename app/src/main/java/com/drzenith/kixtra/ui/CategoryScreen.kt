@@ -42,7 +42,7 @@ fun CategoryScreen(state: Screen.CategoryPage, actions: Actions) {
                 state.streams.reset()
                 loadStreams(state, scope)
             }
-            val hide = state.filters.hideMature
+            val hide = actions.store.hideMature
             LazyVerticalGrid(GridCells.Adaptive(CARD_MIN_WIDTH), Modifier.fillMaxSize(), state = state.grid) {
                 items(state.streams.items.filter { !(hide && it.mature) }, key = { it.slug }) { s ->
                     StreamCard(s, onClick = { actions.openLive(s.slug) }, onChannel = { actions.openChannel(s.slug) })

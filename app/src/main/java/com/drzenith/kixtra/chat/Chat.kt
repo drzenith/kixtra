@@ -199,6 +199,7 @@ class ReplayChat(
     private val fetched = HashSet<Long>()
     private var lastBucket: Long? = null
     private var job: Job? = null
+    private var backfillJob: Job? = null
     private val bucketMs = 5_000L
     private val formatter = DateTimeFormatterBuilder().appendInstant(3).toFormatter()
 
@@ -211,15 +212,22 @@ class ReplayChat(
                 val last = lastBucket
                 if (bucket != last) {
                     if (last == null || bucket < last || bucket > last + 2) {
+                        // Seek (or first load): start over and pull in earlier chat to fill the window.
                         buffer.clear()
                         fetched.clear()
+                        backfillJob?.cancel()
+                        backfillJob = launch { backfill(pos) }
                     }
                     lastBucket = bucket
                     for (b in bucket..bucket + 2) {
                         if (fetched.add(b)) launch { fetch(b) }
                     }
                 }
-                buffer.values.removeAll { it.offsetMs < pos - 120_000 }
+                buffer.values.removeAll { it.offsetMs < pos - 900_000 }
+                if (buffer.size > 800) {
+                    val keep = buffer.values.sortedBy { it.offsetMs }.takeLast(600).map { it.id }.toHashSet()
+                    buffer.keys.retainAll(keep)
+                }
                 _messages.value = buffer.values.filter { it.offsetMs <= pos }
                     .sortedBy { it.offsetMs }.takeLast(150)
                 delay(400)
@@ -227,12 +235,26 @@ class ReplayChat(
         }
     }
 
+    /** Messages before [pos]: look further back until there's enough to fill the chat. */
+    private suspend fun backfill(pos: Long) {
+        for (back in listOf(30_000L, 120_000L, 300_000L)) {
+            if (buffer.values.count { it.offsetMs <= pos } >= 40) break
+            val at = (pos - back).coerceAtLeast(0)
+            fetchAt(at)
+            if (at == 0L) break
+        }
+    }
+
     private suspend fun fetch(bucket: Long) {
-        val time = formatter.format(start.plusMillis(bucket * bucketMs))
+        if (!fetchAt(bucket * bucketMs)) fetched.remove(bucket)
+    }
+
+    /** Loads messages from [offsetMs] into the stream onwards. Returns false on failure. */
+    private suspend fun fetchAt(offsetMs: Long): Boolean {
+        val time = formatter.format(start.plusMillis(offsetMs))
         val list = runCatching { KickApi.chatHistory(channelId, time) }.getOrElse {
             status.value = "Chat replay unavailable"
-            fetched.remove(bucket)
-            return
+            return false
         }
         status.value = "Chat replay"
         list.mapNotNull(ChatMsg::parse).forEach { m ->
@@ -240,6 +262,7 @@ class ReplayChat(
             val offset = t.toEpochMilli() - start.toEpochMilli()
             if (offset >= 0) buffer[m.id] = m.copy(offsetMs = offset)
         }
+        return true
     }
 
     override fun stop() {

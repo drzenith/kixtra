@@ -57,7 +57,7 @@ fun SettingsScreen(actions: Actions) {
                     }
                 }
             }
-            Toggle("Hide 18+ streams by default", "Applies to new stream lists", mature) {
+            Toggle("Hide 18+ streams", "Hides streams marked mature in Live and category lists", mature) {
                 mature = it; store.hideMature = it
             }
 

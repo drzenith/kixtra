@@ -13,6 +13,29 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -92,7 +115,7 @@ tailrec fun Context.findActivity(): Activity? = when (this) {
 }
 
 @Composable
-fun PlayerScreen(actions: Actions, inPip: Boolean) {
+fun PlayerScreen(actions: Actions) {
     val pc = actions.player
     val current by pc.current.collectAsState()
     val loading by pc.loading.collectAsState()
@@ -107,6 +130,7 @@ fun PlayerScreen(actions: Actions, inPip: Boolean) {
     var chatInLandscape by remember { mutableStateOf(false) }
     var controlsVisible by remember { mutableStateOf(true) }
     var forceFullscreen by remember { mutableStateOf(false) }
+    val menuOpen = remember { mutableStateOf(false) }
     val fullscreen = (landscape && !wide) || forceFullscreen
     val notice by pc.notice.collectAsState()
     LaunchedEffect(notice) {
@@ -129,11 +153,11 @@ fun PlayerScreen(actions: Actions, inPip: Boolean) {
     }
 
     // Immersive in landscape; restore orientation + bars when leaving the player.
-    DisposableEffect(fullscreen, inPip) {
+    DisposableEffect(fullscreen) {
         val window = activity?.window
         if (window != null) {
             val ctl = WindowCompat.getInsetsController(window, window.decorView)
-            if (fullscreen || inPip) {
+            if (fullscreen) {
                 ctl.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
                 ctl.hide(WindowInsetsCompat.Type.systemBars())
             } else {
@@ -185,13 +209,8 @@ fun PlayerScreen(actions: Actions, inPip: Boolean) {
         onDispose { chat?.stop() }
     }
 
-    if (inPip) {
-        VideoBox(pc.player, Modifier.fillMaxSize(), useController = false, fullscreen = true, onFullscreen = {}, onControls = {})
-        return
-    }
-
     val video: @Composable (Modifier) -> Unit = { m ->
-        Box(m.background(Color.Black)) {
+        Box(m.background(Color.Black).then(if (fullscreen) Modifier else Modifier.swipeDown { actions.minimizePlayer() })) {
             VideoBox(pc.player, Modifier.fillMaxSize(), true, fullscreen, ::setFullscreen) { controlsVisible = it }
             when {
                 loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
@@ -210,14 +229,18 @@ fun PlayerScreen(actions: Actions, inPip: Boolean) {
                         .background(Color(0xCC000000)).padding(horizontal = 10.dp, vertical = 6.dp),
                 )
             }
-            if (fullscreen && controlsVisible) {
+            // Player overlay controls: shown with the player's own controls (or while a menu is open).
+            if (controlsVisible || menuOpen.value) {
+                Box(Modifier.align(Alignment.TopStart).padding(8.dp)) { ContextAction(actions) }
                 Row(
                     Modifier.align(Alignment.TopEnd).padding(8.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    PlaybackButtons(actions, compactMode = true)
-                    if (chat != null) {
-                        SmallButton(if (chatInLandscape) "Hide chat" else "Chat") { chatInLandscape = !chatInLandscape }
+                    QualitySpeedButtons(actions) { menuOpen.value = it }
+                    Pill("↻") { pc.reload(keepPosition = true) }
+                    if (fullscreen && chat != null) {
+                        Pill(if (chatInLandscape) "Hide chat" else "Chat") { chatInLandscape = !chatInLandscape }
                     }
                 }
             }
@@ -256,7 +279,7 @@ fun PlayerScreen(actions: Actions, inPip: Boolean) {
 }
 
 @Composable
-private fun VideoBox(
+internal fun VideoBox(
     player: Player,
     modifier: Modifier,
     useController: Boolean,
@@ -307,8 +330,11 @@ private fun InfoBar(actions: Actions) {
         is Playable.Vod -> p.video.title
         is Playable.ClipItem -> p.clip.title
     }
-    Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp)) {
+    Column(Modifier.fillMaxWidth().swipeDown { actions.minimizePlayer() }.padding(start = 2.dp, end = 10.dp, top = 4.dp, bottom = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = { actions.minimizePlayer() }) {
+                Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Minimize player")
+            }
             Box(Modifier.clickable { actions.openChannel(ch.slug) }) { Avatar(ch.avatar, 36) }
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
@@ -326,19 +352,12 @@ private fun InfoBar(actions: Actions) {
                 }
             }
         }
-        Row(
-            Modifier.padding(top = 8.dp).horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            PlaybackButtons(actions, compactMode = false)
-        }
     }
 }
 
-/** Quality, speed and live/from-start switches; shared by the portrait bar and the landscape overlay. */
+/** Compact quality + speed menus for the player overlay. */
 @Composable
-private fun PlaybackButtons(actions: Actions, compactMode: Boolean) {
+private fun QualitySpeedButtons(actions: Actions, onMenuOpen: (Boolean) -> Unit) {
     val pc = actions.player
     val current by pc.current.collectAsState()
     val qualities by pc.qualities.collectAsState()
@@ -351,45 +370,164 @@ private fun PlaybackButtons(actions: Actions, compactMode: Boolean) {
         qualities.forEach { q -> add(q.label to { pc.selectQuality(q) }) }
         add("Audio only" to { pc.selectAudioOnly() })
     }
-    MenuButton(if (compactMode) selectedQ else "Quality: $selectedQ", qOptions, selectedQ)
-
+    MenuButton(selectedQ, qOptions, selectedQ, onMenuOpen)
     if (p.seekable) {
-        MenuButton(
-            if (compactMode) speedLabel(speed) else "Speed: ${speedLabel(speed)}",
-            SPEEDS.map { s -> speedLabel(s) to { pc.setSpeed(s) } },
-            speedLabel(speed),
-        )
+        MenuButton(speedLabel(speed), SPEEDS.map { s -> speedLabel(s) to { pc.setSpeed(s) } }, speedLabel(speed), onMenuOpen)
     }
+}
+
+/** The one context-dependent jump: live -> from start, from start -> live, clip -> full VOD. */
+@Composable
+private fun ContextAction(actions: Actions) {
+    val current by actions.player.current.collectAsState()
+    val p = current ?: return
     when {
-        p is Playable.Live && p.channel.live != null ->
-            SmallButton("⏮ From start") { actions.watchFromStart(p.channel) }
-        p is Playable.Vod && p.dvr ->
-            SmallButton("● Go live") { actions.player.playLive(p.channel.slug) }
+        p is Playable.Live && p.channel.live != null -> Pill("⏮ From start") { actions.watchFromStart(p.channel) }
+        p is Playable.Vod && p.dvr -> Pill("● Go live") { actions.player.playLive(p.channel.slug) }
+        p is Playable.ClipItem -> Pill("▶ Continue in VOD") { actions.continueClipInVod(p.clip) }
     }
-    if (!compactMode) SmallButton("↻") { pc.reload(keepPosition = true) }
+}
+
+/** Small translucent button that sits on top of the video. */
+@Composable
+private fun Pill(label: String, onClick: () -> Unit) {
+    Text(
+        label,
+        fontSize = 12.sp,
+        fontWeight = FontWeight.SemiBold,
+        color = Color.White,
+        maxLines = 1,
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(Color(0x99000000))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+    )
 }
 
 @Composable
-private fun SmallButton(label: String, onClick: () -> Unit) {
-    OutlinedButton(
-        onClick = onClick,
-        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
-        colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(containerColor = Color(0x99000000)),
-    ) { Text(label, fontSize = 13.sp, color = Color.White) }
-}
-
-@Composable
-private fun MenuButton(label: String, options: List<Pair<String, () -> Unit>>, selected: String?) {
+private fun MenuButton(
+    label: String,
+    options: List<Pair<String, () -> Unit>>,
+    selected: String?,
+    onOpenChange: (Boolean) -> Unit,
+) {
     var open by remember { mutableStateOf(false) }
+    fun setOpen(v: Boolean) {
+        open = v
+        onOpenChange(v)
+    }
     Box {
-        SmallButton("$label ▾") { open = true }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+        Pill("$label ▾") { setOpen(true) }
+        DropdownMenu(expanded = open, onDismissRequest = { setOpen(false) }) {
             options.forEach { (text, action) ->
                 DropdownMenuItem(
                     text = { Text(if (text == selected) "✓  $text" else "    $text") },
-                    onClick = { open = false; action() },
+                    onClick = { setOpen(false); action() },
                 )
             }
+        }
+    }
+}
+
+
+/** Fires [onSwipe] on a clear downward swipe; other touches still reach the player. */
+fun Modifier.swipeDown(onSwipe: () -> Unit): Modifier = pointerInput(Unit) {
+    val threshold = 72.dp.toPx()
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        var dx = 0f
+        var dy = 0f
+        while (true) {
+            val event = awaitPointerEvent(PointerEventPass.Initial)
+            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+            if (!change.pressed) break
+            val delta = change.positionChange()
+            dx += delta.x
+            dy += delta.y
+            if (dy > threshold && dy > 2 * abs(dx)) {
+                change.consume()
+                onSwipe()
+                break
+            }
+        }
+    }
+}
+
+/** Video only, for picture-in-picture. */
+@Composable
+fun PipVideo(actions: Actions) {
+    VideoBox(actions.player.player, Modifier.fillMaxSize(), useController = false, fullscreen = true, onFullscreen = {}, onControls = {})
+}
+
+/**
+ * Floating mini player shown while browsing. Tap to expand, swipe sideways to close.
+ */
+@Composable
+fun MiniPlayer(actions: Actions, modifier: Modifier = Modifier) {
+    val pc = actions.player
+    val loading by pc.loading.collectAsState()
+    val error by pc.error.collectAsState()
+    val playing by pc.isPlaying.collectAsState()
+    var dragX by remember { mutableFloatStateOf(0f) }
+    val widthPx = with(LocalDensity.current) { 200.dp.toPx() }
+
+    Box(
+        modifier
+            .offset { IntOffset(dragX.roundToInt(), 0) }
+            .graphicsLayer { alpha = 1f - (abs(dragX) / widthPx).coerceIn(0f, 0.8f) }
+            .width(200.dp)
+            .aspectRatio(16f / 9f)
+            .shadow(10.dp, RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color.Black)
+    ) {
+        VideoBox(pc.player, Modifier.fillMaxSize(), useController = false, fullscreen = false, onFullscreen = {}, onControls = {})
+        // Gesture layer on top of the video.
+        Box(
+            Modifier.matchParentSize()
+                .pointerInput(Unit) {
+                    detectHorizontalDragGestures(
+                        onDragEnd = {
+                            if (abs(dragX) > widthPx * 0.4f) actions.closePlayer()
+                            dragX = 0f
+                        },
+                        onDragCancel = { dragX = 0f },
+                    ) { change, amount ->
+                        change.consume()
+                        dragX += amount
+                    }
+                }
+                .pointerInput(Unit) { detectTapGestures(onTap = { actions.expandPlayer() }) }
+        ) {
+            when {
+                loading -> CircularProgressIndicator(Modifier.align(Alignment.Center).size(28.dp), strokeWidth = 3.dp)
+                error != null -> Text(
+                    "Playback error",
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+            }
+            Text(
+                if (playing) "❚❚" else "▶",
+                color = Color.White,
+                fontSize = 14.sp,
+                modifier = Modifier.align(Alignment.BottomStart)
+                    .clickable { if (pc.player.isPlaying) pc.player.pause() else pc.player.play() }
+                    .background(Color(0x88000000), RoundedCornerShape(topEnd = 8.dp))
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+            )
+            Icon(
+                Icons.Filled.Close,
+                contentDescription = "Close player",
+                tint = Color.White,
+                modifier = Modifier.align(Alignment.TopEnd)
+                    .clickable { actions.closePlayer() }
+                    .background(Color(0x88000000), RoundedCornerShape(bottomStart = 8.dp))
+                    .padding(4.dp)
+                    .size(18.dp),
+            )
         }
     }
 }

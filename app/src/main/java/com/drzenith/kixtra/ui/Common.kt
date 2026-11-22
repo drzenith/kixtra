@@ -78,8 +78,11 @@ fun hms(ms: Long): String {
     else String.format(Locale.US, "%d:%02d", m, sec)
 }
 
-fun ago(time: String?): String {
-    val t = parseKickTime(time) ?: return ""
+fun ago(time: String?): String = parseKickTime(time)?.let { agoInstant(it) } ?: ""
+
+fun agoMs(epochMs: Long): String = agoInstant(Instant.ofEpochMilli(epochMs))
+
+private fun agoInstant(t: Instant): String {
     val d = Duration.between(t, Instant.now())
     return when {
         d.toMinutes() < 60 -> "${d.toMinutes().coerceAtLeast(1)}m ago"
@@ -345,7 +348,6 @@ fun StreamFilterRow(filters: StreamFilters, onChanged: () -> Unit) {
             listOf("viewer_count_desc" to "Most viewers", "featured" to "Featured"),
             filters.sort,
         ) { filters.sort = it; onChanged() }
-        ToggleChip("Hide 18+", filters.hideMature) { filters.hideMature = !filters.hideMature }
     }
 }
 

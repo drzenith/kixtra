@@ -53,6 +53,12 @@ class Store(context: Context) {
         get() = prefs.getBoolean("asked_notif", false)
         set(v) = prefs.edit { putBoolean("asked_notif", v) }
 
+    // ---- Last time a followed channel was seen live (epoch ms) ----
+    fun lastLive(slug: String): Long? = prefs.getLong("lastlive_${slug.lowercase()}", 0L).takeIf { it > 0 }
+    fun saveLastLive(slug: String, ms: Long) {
+        if (ms > (lastLive(slug) ?: 0L)) prefs.edit { putLong("lastlive_${slug.lowercase()}", ms) }
+    }
+
     // ---- Resume positions ----
     fun position(key: String): Long = prefs.getLong("pos_$key", 0L)
     fun savePosition(key: String, ms: Long) = prefs.edit { putLong("pos_$key", ms) }

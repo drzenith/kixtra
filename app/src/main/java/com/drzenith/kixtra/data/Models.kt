@@ -10,6 +10,8 @@ data class Channel(
     val verified: Boolean,
     val chatroomId: Long?,
     val live: LiveInfo?,
+    /** When the channel was last live (epoch ms), if Kick tells us. */
+    val lastLiveMs: Long? = null,
 )
 
 data class LiveInfo(

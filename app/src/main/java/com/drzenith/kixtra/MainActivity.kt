@@ -11,7 +11,16 @@ import android.util.Rational
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawing
@@ -27,6 +36,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.drzenith.kixtra.player.PlaybackService
+import com.drzenith.kixtra.player.MiniPlayer
+import com.drzenith.kixtra.player.PipVideo
 import com.drzenith.kixtra.player.PlayerScreen
 import com.drzenith.kixtra.player.isWideWindow
 import com.drzenith.kixtra.ui.Actions
@@ -74,15 +85,29 @@ class MainActivity : ComponentActivity() {
         val cfg = LocalConfiguration.current
         val landscape = cfg.orientation == Configuration.ORIENTATION_LANDSCAPE
         val phoneFullscreen = landscape && !isWideWindow(cfg)
+        val pc = app.playerController
+        val current by pc.current.collectAsState()
+        val loading by pc.loading.collectAsState()
+        val error by pc.error.collectAsState()
+        val hasPlayer = current != null || loading || error != null
+        val expanded = actions.playerExpanded && hasPlayer
+
         BackHandler(enabled = true) {
-            if (top is Screen.Player && phoneFullscreen) {
-                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-            } else if (!actions.back()) {
-                finish()
+            when {
+                expanded && phoneFullscreen -> requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                expanded -> actions.minimizePlayer()
+                actions.back() -> {}
+                // Leaving the app with something playing: keep it alive (background audio / mini player).
+                hasPlayer -> moveTaskToBack(true)
+                else -> finish()
             }
         }
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            val fullBleed = top is Screen.Player && (phoneFullscreen || inPip.value)
+            if (inPip.value) {
+                if (hasPlayer) PipVideo(actions)
+                return@Surface
+            }
+            val fullBleed = expanded && phoneFullscreen
             Box(if (fullBleed) Modifier.fillMaxSize() else Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
                 when (top) {
                     is Screen.Home -> HomeScreen(top, actions)
@@ -90,7 +115,22 @@ class MainActivity : ComponentActivity() {
                     is Screen.ChannelPage -> ChannelScreen(top, actions)
                     is Screen.CategoryPage -> CategoryScreen(top, actions)
                     is Screen.Settings -> SettingsScreen(actions)
-                    is Screen.Player -> PlayerScreen(actions, inPip.value)
+                }
+                if (expanded) {
+                    // Full player above the screens; swallow touches so nothing underneath reacts.
+                    Box(
+                        Modifier.fillMaxSize()
+                            .background(MaterialTheme.colorScheme.background)
+                            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}
+                    ) {
+                        PlayerScreen(actions)
+                    }
+                } else if (hasPlayer) {
+                    MiniPlayer(
+                        actions,
+                        Modifier.align(Alignment.BottomEnd)
+                            .padding(end = 12.dp, bottom = if (top is Screen.Home) 92.dp else 16.dp),
+                    )
                 }
             }
         }
@@ -113,7 +153,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun shouldEnterPip(): Boolean =
-        app.store.pipEnabled && nav.top is Screen.Player && app.playerController.player.isPlaying &&
+        app.store.pipEnabled && app.playerController.current.value != null && app.playerController.player.isPlaying &&
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
 
     override fun onUserLeaveHint() {

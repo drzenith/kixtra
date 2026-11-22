@@ -72,7 +72,6 @@ class Paged<T>(private val keyOf: (T) -> String) {
 class StreamFilters {
     var language by mutableStateOf(App.instance.store.defaultLanguage)
     var sort by mutableStateOf("viewer_count_desc")
-    var hideMature by mutableStateOf(App.instance.store.hideMature)
 }
 
 /** Filters for clip lists. */
@@ -89,6 +88,7 @@ sealed class Screen {
     class Home : Screen() {
         var tab by mutableIntStateOf(0)
         val follows = Loadable<List<Channel>>()
+        var followsLoadedAt = 0L
         val streams = streamPaged()
         val streamFilters = StreamFilters()
         val categories = Paged<Category> { it.slug }
@@ -129,7 +129,6 @@ sealed class Screen {
         val grid = LazyGridState()
     }
 
-    class Player : Screen()
     class Settings : Screen()
 }
 
@@ -138,8 +137,6 @@ class Navigator {
     val top: Screen get() = stack.last()
 
     fun push(s: Screen) {
-        // Only one player entry at a time.
-        if (s is Screen.Player) stack.removeAll { it is Screen.Player }
         stack.add(s)
     }
 

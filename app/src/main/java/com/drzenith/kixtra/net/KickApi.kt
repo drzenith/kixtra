@@ -57,8 +57,24 @@ object KickApi {
             verified = o.b("verified") ?: (o["verified"] is JsonObject),
             chatroomId = o.o("chatroom").l("id") ?: o.l("chatroom_id"),
             live = live,
+            lastLiveMs = o.a("previous_livestreams").objects().mapNotNull(::endTimeMs).maxOrNull(),
         )
     }
+
+    /** End (or start) time of a past stream object, in epoch ms. */
+    private fun endTimeMs(v: JsonObject): Long? {
+        val start = com.drzenith.kixtra.chat.parseKickTime(v.s("start_time") ?: v.s("created_at"))?.toEpochMilli()
+            ?: return null
+        val dur = v.l("duration") ?: 0
+        return start + dur
+    }
+
+    /** When a channel last went offline, from its newest VOD (for channels Kick gives no history for). */
+    suspend fun lastLiveFromVideos(slug: String): Long? = runCatching {
+        videos(slug).mapNotNull { v ->
+            com.drzenith.kixtra.chat.parseKickTime(v.startTime)?.toEpochMilli()?.plus(v.durationMs)
+        }.maxOrNull()
+    }.getOrNull()
 
     suspend fun videos(slug: String): List<Video> {
         val el = Http.getJson("https://kick.com/api/v2/channels/${enc(slug.lowercase())}/videos")
@@ -248,6 +264,49 @@ object KickApi {
         val c = o.o("clip") ?: o
         return c.s("clip_url") ?: c.s("playback_url") ?: c.s("video_url") ?: clip.url
             ?: throw ApiException(0, "Couldn't get this clip")
+    }
+
+    /** Where a clip came from: the VOD (or still-growing live VOD) and the clip's position in it. */
+    data class ClipSource(val channel: Channel, val video: Video?, val offsetMs: Long, val dvr: Boolean)
+
+    suspend fun clipSource(clip: Clip): ClipSource? {
+        val d = runCatching {
+            Http.getJson("https://web.kick.com/api/v1/clips/${enc(clip.id)}").obj().let { it.o("data") ?: it }
+        }.getOrNull()
+        val slug = d.o("channel").s("slug") ?: clip.channelSlug
+        val channel = channel(slug)
+        val startedAt = com.drzenith.kixtra.chat.parseKickTime(d.s("started_at"))?.toEpochMilli()
+        val videoId = d.o("video").s("id")
+        val rawOffset = d.o("video").l("offset")
+        val vids = runCatching { videos(slug) }.getOrDefault(emptyList())
+        fun startOf(v: Video) = com.drzenith.kixtra.chat.parseKickTime(v.startTime)?.toEpochMilli()
+
+        val byId = videoId?.let { id ->
+            vids.firstOrNull { it.uuid == id || it.vodId == id || it.livestreamId.toString() == id }
+        }
+        val byTime = if (startedAt == null) null else vids.firstOrNull { v ->
+            val s = startOf(v) ?: return@firstOrNull false
+            startedAt >= s && (v.isLive || v.durationMs == 0L || startedAt <= s + v.durationMs)
+        }
+        val video = byId ?: byTime
+        if (video != null) {
+            val start = startOf(video)
+            val offset = when {
+                byId != null && rawOffset != null ->
+                    // Kick reports seconds; guard against it ever switching to ms.
+                    if (video.durationMs > 0 && rawOffset * 1000 > video.durationMs + 60_000) rawOffset else rawOffset * 1000
+                startedAt != null && start != null -> startedAt - start
+                else -> 0L
+            }
+            return ClipSource(channel, video, offset.coerceAtLeast(0), dvr = false)
+        }
+        // Clip from the stream that is live right now but not in the VOD list yet.
+        val live = channel.live
+        val liveStart = com.drzenith.kixtra.chat.parseKickTime(live?.startTime)?.toEpochMilli()
+        if (live != null && startedAt != null && liveStart != null && startedAt >= liveStart) {
+            return ClipSource(channel, null, startedAt - liveStart, dvr = true)
+        }
+        return null
     }
 
     // ---------- Search ----------
