@@ -1,5 +1,5 @@
 # One lean job: build the APK and publish it as the rolling "latest" release.
-# Kept minimal on purpose (no lint, no tests, stale runs cancelled) to save Actions minutes.
+# Signed with the key stored in the KIXTRA_KEYSTORE_B64 / KIXTRA_KEYSTORE_PASSWORD repo secrets.
 name: Build APK
 
 on:
@@ -35,7 +35,17 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Build
-        run: ./gradlew :app:assembleRelease --stacktrace
+        env:
+          KEYSTORE_B64: ${{ secrets.KIXTRA_KEYSTORE_B64 }}
+          KIXTRA_KEYSTORE_PASSWORD: ${{ secrets.KIXTRA_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ] || [ -z "$KIXTRA_KEYSTORE_PASSWORD" ]; then
+            echo "::error::Missing KIXTRA_KEYSTORE_B64 / KIXTRA_KEYSTORE_PASSWORD repository secrets"
+            exit 1
+          fi
+          export KIXTRA_KEYSTORE_PATH="$RUNNER_TEMP/kixtra-release.jks"
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$KIXTRA_KEYSTORE_PATH"
+          ./gradlew :app:assembleRelease --stacktrace
 
       - name: Publish rolling release
         env:

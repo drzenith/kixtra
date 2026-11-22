@@ -9,6 +9,11 @@ java {
     }
 }
 
+// Release signing key comes from CI secrets (never committed). Local builds fall back to the debug key.
+val keystorePath: String? = System.getenv("KIXTRA_KEYSTORE_PATH")
+val keystorePassword: String? = System.getenv("KIXTRA_KEYSTORE_PASSWORD")
+val hasReleaseKey = !keystorePath.isNullOrBlank() && !keystorePassword.isNullOrBlank()
+
 android {
     namespace = "com.drzenith.kixtra"
     compileSdk = 37
@@ -22,20 +27,19 @@ android {
     }
 
     signingConfigs {
-        create("kixtra") {
-            storeFile = file("kixtra.jks")
-            storePassword = "kixtra123"
-            keyAlias = "kixtra"
-            keyPassword = "kixtra123"
+        if (hasReleaseKey) {
+            create("kixtra") {
+                storeFile = file(keystorePath!!)
+                storePassword = keystorePassword
+                keyAlias = "kixtra"
+                keyPassword = keystorePassword
+            }
         }
     }
 
     buildTypes {
-        debug {
-            signingConfig = signingConfigs.getByName("kixtra")
-        }
         release {
-            signingConfig = signingConfigs.getByName("kixtra")
+            signingConfig = signingConfigs.getByName(if (hasReleaseKey) "kixtra" else "debug")
         }
     }
     compileOptions {

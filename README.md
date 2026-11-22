@@ -18,7 +18,8 @@ A no-login Android viewer for Kick, inspired by [Xtra](https://github.com/cracke
 
 Every push to `main` builds the app on GitHub Actions and publishes it as the
 **latest** release: Releases → `latest` → `kixtra.apk`. All builds are signed with the
-same key (`app/kixtra.jks`), so new builds install over old ones.
+same private key (stored as the `KIXTRA_KEYSTORE_B64` and `KIXTRA_KEYSTORE_PASSWORD`
+repository secrets), so new builds install over old ones. Local builds use the debug key.
 
 ## Notes
 
