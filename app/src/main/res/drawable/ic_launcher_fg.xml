@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Blocky "K" with a play notch -->
+    <path
+        android:fillColor="#FF53FC18"
+        android:pathData="M34,30h12v18l14,-18h14l-17,22l17,26h-14l-14,-21v21h-12z" />
+</vector>
