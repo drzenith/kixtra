@@ -219,6 +219,13 @@ fun StreamCard(item: StreamItem, onClick: () -> Unit, onChannel: () -> Unit) {
 
 @Composable
 fun VideoCard(video: Video, progressMs: Long, onClick: () -> Unit) {
+    val now = rememberTicker()
+    // Still recording: its length is "so far", i.e. time since the stream started.
+    val lengthMs = remember(video.durationMs, video.isLive, video.startTime, now) {
+        if (video.durationMs > 0) video.durationMs
+        else if (video.isLive) parseKickTime(video.startTime)?.let { now - it.toEpochMilli() } ?: 0L
+        else 0L
+    }
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 6.dp)) {
         Box(Modifier.width(160.dp)) {
             Thumb(video.thumbnail) {
@@ -228,8 +235,8 @@ fun VideoCard(video: Video, progressMs: Long, onClick: () -> Unit) {
                         Badge(hms(video.durationMs), Color(0xCC000000), modifier = Modifier.align(Alignment.BottomEnd))
                     }
                 }
-                if (progressMs > 0 && video.durationMs > 0) {
-                    val frac = (progressMs.toFloat() / video.durationMs).coerceIn(0f, 1f)
+                if (progressMs > 0 && lengthMs > 0) {
+                    val frac = (progressMs.toFloat() / lengthMs).coerceIn(0f, 1f)
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomStart) {
                         Box(Modifier.fillMaxWidth(frac).height(3.dp).background(BrandGradient))
                     }
