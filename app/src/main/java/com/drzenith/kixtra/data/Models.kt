@@ -90,8 +90,14 @@ data class Video(
     val category: String?,
     val source: String?,
 ) {
-    /** Stable key for resume positions. */
+    /** Stable key for list items. */
     val key: String get() = uuid ?: vodId ?: livestreamId.toString()
+
+    /**
+     * Key for resume positions: the stream (livestream id), so watching it live and watching its
+     * VOD later share the same saved spot.
+     */
+    val progressKey: String get() = if (livestreamId > 0) "ls_$livestreamId" else key
 }
 
 data class Page<T>(val items: List<T>, val next: String?)

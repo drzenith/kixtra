@@ -133,7 +133,7 @@ fun ChannelScreen(state: Screen.ChannelPage, actions: Actions) {
                 when {
                     videos != null && videos.isEmpty() -> full { EmptyBox("No videos") }
                     videos != null -> itemsIndexed(videos, key = { i, v -> "v_${v.key}_$i" }) { _, v ->
-                        VideoCard(v, actions.store.position(v.key)) {
+                        VideoCard(v, actions.store.positionFor(v)) {
                             if (v.isLive && ch.live != null) actions.watchFromStart(ch) else actions.playVod(ch, v)
                         }
                     }

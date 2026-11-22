@@ -404,7 +404,17 @@ class PlayerController(private val context: Context, private val store: Store) {
      */
     fun playChannel(ch: Channel) {
         val dvr = if (store.rewindableLive) com.drzenith.kixtra.ui.Actions.dvrVideo(ch) else null
-        if (dvr != null) play(Playable.Vod(ch, dvr, dvr = true, startAtLive = true)) else play(Playable.Live(ch))
+        if (dvr == null) {
+            play(Playable.Live(ch))
+            return
+        }
+        // Watched this stream before? Pick up where you left off, unless you were at LIVE then.
+        val saved = store.positionFor(dvr)
+        if (saved > 0 && !store.wasLive(dvr.progressKey)) {
+            play(Playable.Vod(ch, dvr, dvr = true), startAtMs = saved)
+        } else {
+            play(Playable.Vod(ch, dvr, dvr = true, startAtLive = true))
+        }
     }
 
     /** Jump to the newest part of a live VOD (no reload). */
@@ -587,17 +597,18 @@ class PlayerController(private val context: Context, private val store: Store) {
     }
 
     private fun resumePosition(p: Playable.Vod): Long {
-        val saved = store.position(progressKey(p))
+        val saved = store.positionFor(p.video)
         val dur = p.video.durationMs
         return if (dur > 0 && saved > dur - 15_000) 0L else saved
     }
 
-    private fun progressKey(p: Playable.Vod) = if (p.dvr) "dvr_${p.channel.live?.id}" else p.video.key
+    private fun progressKey(p: Playable.Vod) = p.video.progressKey
 
     fun saveProgress() {
         val p = current.value as? Playable.Vod ?: return
         if (player.mediaItemCount == 0) return
         store.savePosition(progressKey(p), player.currentPosition.coerceAtLeast(0))
+        if (p.growing) store.saveWasLive(progressKey(p), atLive.value)
     }
 
     /** Re-resolves the playlist URL and continues where we were (expired URLs, snapshot playlists). */

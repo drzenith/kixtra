@@ -91,6 +91,14 @@ class Store(context: Context) {
     fun position(key: String): Long = prefs.getLong("pos_$key", 0L)
     fun savePosition(key: String, ms: Long) = prefs.edit { putLong("pos_$key", ms) }
 
+    /** Saved spot for a VOD (falls back to positions saved by older versions under the old key). */
+    fun positionFor(video: Video): Long =
+        position(video.progressKey).takeIf { it > 0 } ?: position(video.key)
+
+    /** Whether you were at LIVE when you last left this stream. */
+    fun wasLive(key: String): Boolean = prefs.getBoolean("live_$key", false)
+    fun saveWasLive(key: String, live: Boolean) = prefs.edit { putBoolean("live_$key", live) }
+
     // ---- Follows ----
     private val _follows = MutableStateFlow(loadFollows())
     val follows: StateFlow<List<FollowedChannel>> = _follows
