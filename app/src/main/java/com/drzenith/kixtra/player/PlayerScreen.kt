@@ -153,9 +153,7 @@ class BarSpec(
     val onRefresh: () -> Unit,
     /** null = hidden; otherwise whether the side chat / pop-out chat is on. */
     val sideChat: Boolean? = null,
-    val overlayChat: Boolean? = null,
     val onSideChat: () -> Unit = {},
-    val onOverlayChat: () -> Unit = {},
     /** Show "● LIVE" instead of the time readout. */
     val atLive: Boolean = false,
     /** Volume button: muted/silent icon, and whether its pop-up is open (keeps controls up). */
@@ -170,7 +168,6 @@ private class BarButtons(
     val speed: TextView,
     val refresh: TextView,
     val sideChat: ImageButton,
-    val overlayChat: ImageButton,
     val volume: ImageButton,
 )
 
@@ -296,13 +293,14 @@ fun PlayerScreen(actions: Actions) {
             pc.reloadChat()
         },
         sideChat = if (fullscreen && chat != null) chatInLandscape else null,
-        overlayChat = if (fullscreen && chat != null) overlayOn else null,
-        onSideChat = { chatInLandscape = !chatInLandscape },
+        onSideChat = {
+            chatInLandscape = !chatInLandscape
+            if (chatInLandscape) overlayOn = false
+        },
         atLive = atLive,
         silent = muted || volume == 0f,
         volumeOpen = volumeAnchor != null,
         onVolume = { v -> volumeAnchor = if (volumeAnchor != null) null else volumeAnchorOf(v) },
-        onOverlayChat = { overlayOn = !overlayOn },
     )
     val onScrub: (ScrubInfo?) -> Unit = { info ->
         if (seekable) {
@@ -406,7 +404,13 @@ fun PlayerScreen(actions: Actions) {
             video(Modifier.weight(1f).fillMaxHeight())
             if (chat != null && chatInLandscape) {
                 Box(Modifier.width(sideWidth).fillMaxHeight()) {
-                    ChatView(chatMessages?.value ?: emptyList(), chatStatus?.value ?: "", Modifier.fillMaxSize())
+                    ChatView(
+                        chatMessages?.value ?: emptyList(), chatStatus?.value ?: "", Modifier.fillMaxSize(),
+                        onPopOut = {
+                            chatInLandscape = false
+                            overlayOn = true
+                        },
+                    )
                     Box(Modifier.align(Alignment.CenterStart)) { sideChat() }
                 }
             }
@@ -529,12 +533,10 @@ private fun barButton(ctx: Context, text: String, sizeSp: Float = 13f): TextView
     textSize = sizeSp
     typeface = Typeface.DEFAULT_BOLD
     gravity = Gravity.CENTER
-    val pad = (8 * density).toInt()
+    val pad = (6 * density).toInt()
     setPadding(pad, 0, pad, 0)
-    minWidth = (40 * density).toInt()
+    minWidth = (BAR_BUTTON_DP * density).toInt()
     layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, (48 * density).toInt()).apply {
-        leftMargin = (2 * density).toInt()
-        rightMargin = (2 * density).toInt()
         gravity = Gravity.CENTER_VERTICAL
     }
     val tv = TypedValue()
@@ -545,20 +547,21 @@ private fun barButton(ctx: Context, text: String, sizeSp: Float = 13f): TextView
     isFocusable = true
 }
 
-private fun barIcon(ctx: Context, res: Int, label: String): ImageButton = ImageButton(ctx).apply {
-    // Same box as Media3's own bottom-bar buttons (ExoStyledControls.Button.Bottom):
-    // 48x48dp, 12dp padding (24dp icon area), 2dp side margins, icon scaled to fit.
-    val density = resources.displayMetrics.density
+/** Compact control-bar box: 36dp wide x 48dp tall, 24dp icon, no side margins. */
+private const val BAR_BUTTON_DP = 36
+
+private fun compactBarButton(b: ImageButton) {
+    val density = b.resources.displayMetrics.density
     fun dp(v: Int) = (v * density).toInt()
+    b.scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+    b.setPadding(dp(6), dp(12), dp(6), dp(12))
+    b.layoutParams = LinearLayout.LayoutParams(dp(BAR_BUTTON_DP), dp(48)).apply { gravity = Gravity.CENTER_VERTICAL }
+}
+
+private fun barIcon(ctx: Context, res: Int, label: String): ImageButton = ImageButton(ctx).apply {
     setImageResource(res)
     contentDescription = label
-    scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
-    setPadding(dp(12), dp(12), dp(12), dp(12))
-    layoutParams = LinearLayout.LayoutParams(dp(48), dp(48)).apply {
-        leftMargin = dp(2)
-        rightMargin = dp(2)
-        gravity = Gravity.CENTER_VERTICAL
-    }
+    compactBarButton(this)
     val tv = TypedValue()
     if (ctx.theme.resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, tv, true)) {
         setBackgroundResource(tv.resourceId)
@@ -770,25 +773,38 @@ internal fun VideoBox(
                 }
                 // Quality / speed / refresh in the bottom bar, to the left of fullscreen.
                 if (withBar) {
-                    findViewById<ViewGroup>(androidx.media3.ui.R.id.exo_basic_controls)?.let { basic ->
+                    val bottomBar = findViewById<ViewGroup>(androidx.media3.ui.R.id.exo_bottom_bar)
+                    val basic = findViewById<ViewGroup>(androidx.media3.ui.R.id.exo_basic_controls)
+                    if (bottomBar != null && basic != null) {
+                        // Our own button row instead of Media3's: Media3 moves buttons into a
+                        // "⋮" overflow when it thinks they don't fit (portrait). Its row is
+                        // hidden and fullscreen moves into ours, always last.
+                        val row = LinearLayout(ctx).apply {
+                            orientation = LinearLayout.HORIZONTAL
+                            gravity = Gravity.CENTER_VERTICAL
+                            layoutParams = android.widget.FrameLayout.LayoutParams(
+                                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                                Gravity.CENTER_VERTICAL or Gravity.END,
+                            )
+                        }
+                        bottomBar.addView(row)
+                        basic.visibility = View.GONE
                         val q = barButton(ctx, "Auto")
                         val s = barButton(ctx, "1x")
                         val r = barButton(ctx, "↻", sizeSp = 18f)
                         val sc = barIcon(ctx, R.drawable.ic_chat, "Side chat")
-                        val oc = barIcon(ctx, R.drawable.ic_chat_overlay, "Pop-out chat")
                         val vol = barIcon(ctx, R.drawable.ic_volume_up, "Volume")
                         vol.setOnClickListener { v -> barRef.value?.onVolume?.invoke(v) }
                         q.setOnClickListener { v -> barRef.value?.onQuality?.invoke(v) }
                         s.setOnClickListener { v -> barRef.value?.onSpeed?.invoke(v) }
                         r.setOnClickListener { barRef.value?.onRefresh?.invoke() }
                         sc.setOnClickListener { barRef.value?.onSideChat?.invoke() }
-                        oc.setOnClickListener { barRef.value?.onOverlayChat?.invoke() }
-                        basic.addView(oc, 0)
-                        basic.addView(sc, 0)
-                        basic.addView(r, 0)
-                        basic.addView(s, 0)
-                        basic.addView(q, 0)
-                        basic.addView(vol, 0)
+                        listOf(vol, q, s, r, sc).forEach { row.addView(it) }
+                        findViewById<ImageButton>(androidx.media3.ui.R.id.exo_fullscreen)?.let { fs ->
+                            (fs.parent as? ViewGroup)?.removeView(fs)
+                            compactBarButton(fs)
+                            row.addView(fs)
+                        }
                         // "● LIVE" in place of the time readout while at the live point (like kick.com).
                         val live = findViewById<ViewGroup>(androidx.media3.ui.R.id.exo_time)?.let { time ->
                             TextView(ctx).apply {
@@ -800,7 +816,7 @@ internal fun VideoBox(
                                 time.addView(this)
                             }
                         }
-                        tag = BarButtons(live, q, s, r, sc, oc, vol)
+                        tag = BarButtons(live, q, s, r, sc, vol)
                     }
                 }
                 setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { v -> ctl(v == View.VISIBLE) })
@@ -830,7 +846,6 @@ internal fun VideoBox(
                 }
                 b.sideChat.visibility = if (spec.sideChat == null) View.GONE else View.VISIBLE
                 b.sideChat.alpha = if (spec.sideChat == true) 1f else 0.55f
-                b.overlayChat.visibility = if (spec.overlayChat == null) View.GONE else View.VISIBLE
                 b.liveLabel?.let { label ->
                     val time = label.parent as? ViewGroup
                     if (time != null) {
@@ -843,7 +858,6 @@ internal fun VideoBox(
                         }
                     }
                 }
-                b.overlayChat.alpha = if (spec.overlayChat == true) 1f else 0.55f
                 b.volume.setImageResource(if (spec.silent) R.drawable.ic_volume_off else R.drawable.ic_volume_up)
                 // Don't let the controls (and the pop-up with them) time out while adjusting volume.
                 val timeout = if (spec.volumeOpen) 0 else DEFAULT_CONTROLLER_TIMEOUT_MS

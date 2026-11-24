@@ -4,6 +4,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Icon
+import androidx.compose.ui.res.painterResource
+import com.drzenith.kixtra.R
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -56,6 +62,8 @@ fun ChatView(
     modifier: Modifier = Modifier,
     overlay: Boolean = false,
     showStatus: Boolean = true,
+    /** Shows a small "pop out over the video" icon at the top of the chat. */
+    onPopOut: (() -> Unit)? = null,
 ) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -74,13 +82,27 @@ fun ChatView(
     }
 
     Column(if (overlay) modifier else modifier.background(MaterialTheme.colorScheme.surfaceContainer)) {
-        if (showStatus) {
-            Text(
-                status,
-                fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
-            )
+        // Only problems are worth a line ("Reconnecting…", "unavailable"); "Live chat" /
+        // "Chat replay" go without saying.
+        val note = status.takeIf { showStatus && it.isNotBlank() && it != "Live chat" && it != "Chat replay" }
+        if (note != null || onPopOut != null) {
+            Row(Modifier.fillMaxWidth().height(30.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    note ?: "",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f).padding(horizontal = 10.dp),
+                )
+                if (onPopOut != null) {
+                    Icon(
+                        painterResource(R.drawable.ic_chat_overlay),
+                        contentDescription = "Pop out chat over the video",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.clip(RoundedCornerShape(50)).clickable(onClick = onPopOut)
+                            .padding(horizontal = 8.dp, vertical = 5.dp).size(20.dp),
+                    )
+                }
+            }
         }
         Box(Modifier.fillMaxSize()) {
             LazyColumn(Modifier.fillMaxSize(), state = listState, reverseLayout = true) {
