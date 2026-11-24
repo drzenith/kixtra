@@ -1,6 +1,15 @@
 package com.drzenith.kixtra
 
+import android.app.PendingIntent
 import android.app.PictureInPictureParams
+import android.app.RemoteAction
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.IntentFilter
+import android.graphics.drawable.Icon
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.ActivityInfo
@@ -77,6 +86,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         actions = Actions(nav, app.playerController, app.store)
+
+        ContextCompat.registerReceiver(this, pipReceiver, IntentFilter(ACTION_PIP), ContextCompat.RECEIVER_NOT_EXPORTED)
+        // Keep the PiP play/pause button in step with playback.
+        lifecycleScope.launch {
+            app.playerController.isPlaying.collect {
+                if (isInPictureInPictureMode) runCatching { setPictureInPictureParams(pipParams()) }
+            }
+        }
 
         addOnPictureInPictureModeChangedListener(Consumer { info ->
             inPip.value = info.isInPictureInPictureMode
@@ -218,7 +235,7 @@ class MainActivity : ComponentActivity() {
         super.onUserLeaveHint()
         if (shouldEnterPip()) {
             runCatching {
-                enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build())
+                enterPictureInPictureMode(pipParams())
             }
         }
     }
@@ -233,8 +250,53 @@ class MainActivity : ComponentActivity() {
         if (!isInPictureInPictureMode) app.playerController.onBackground()
     }
 
+    // ---------- Picture-in-picture buttons ----------
+    // Android builds PiP buttons from the media session (previous/next/play), which don't fit
+    // here, so we supply our own: back 10s, play/pause, forward 10s (play/pause only for the
+    // plain live stream, which can't seek).
+
+    private val pipReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val p = app.playerController.player
+            when (intent.getIntExtra(EXTRA_PIP_ACTION, 0)) {
+                PIP_BACK -> p.seekBack()
+                PIP_TOGGLE -> if (p.isPlaying) p.pause() else p.play()
+                PIP_FORWARD -> p.seekForward()
+            }
+        }
+    }
+
+    private fun pipAction(code: Int, icon: Int, title: String): RemoteAction {
+        val intent = Intent(ACTION_PIP).setPackage(packageName).putExtra(EXTRA_PIP_ACTION, code)
+        val pending = PendingIntent.getBroadcast(this, code, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        return RemoteAction(Icon.createWithResource(this, icon), title, title, pending)
+    }
+
+    private fun pipParams(): PictureInPictureParams {
+        val pc = app.playerController
+        val toggle = if (pc.player.isPlaying) pipAction(PIP_TOGGLE, R.drawable.ic_pip_pause, "Pause")
+        else pipAction(PIP_TOGGLE, R.drawable.ic_pip_play, "Play")
+        val actions = if (pc.current.value?.seekable == true) {
+            listOf(pipAction(PIP_BACK, R.drawable.ic_pip_back10, "Back 10 seconds"), toggle,
+                pipAction(PIP_FORWARD, R.drawable.ic_pip_fwd10, "Forward 10 seconds"))
+        } else {
+            listOf(toggle)
+        }
+        return PictureInPictureParams.Builder()
+            .setAspectRatio(Rational(16, 9))
+            .setActions(actions)
+            .build()
+    }
+
     override fun onDestroy() {
+        runCatching { unregisterReceiver(pipReceiver) }
         controllerFuture?.let { MediaController.releaseFuture(it) }
         super.onDestroy()
     }
 }
+
+private const val ACTION_PIP = "com.drzenith.kixtra.PIP_ACTION"
+private const val EXTRA_PIP_ACTION = "action"
+private const val PIP_BACK = 1
+private const val PIP_TOGGLE = 2
+private const val PIP_FORWARD = 3

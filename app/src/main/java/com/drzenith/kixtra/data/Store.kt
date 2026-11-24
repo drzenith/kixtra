@@ -72,6 +72,11 @@ class Store(context: Context) {
         get() = prefs.getBoolean("rewindable_live", true)
         set(v) = prefs.edit { putBoolean("rewindable_live", v) }
 
+    /** Player volume (0..1), separate from the phone's media volume. */
+    var volume: Float
+        get() = prefs.getFloat("volume", 1f)
+        set(v) = prefs.edit { putFloat("volume", v) }
+
     var askedNotifications: Boolean
         get() = prefs.getBoolean("asked_notif", false)
         set(v) = prefs.edit { putBoolean("asked_notif", v) }

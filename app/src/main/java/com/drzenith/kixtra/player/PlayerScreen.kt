@@ -65,6 +65,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.ui.res.painterResource
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -339,6 +342,7 @@ fun PlayerScreen(actions: Actions) {
             }
             if (controlsVisible) {
                 Box(Modifier.align(Alignment.TopStart).padding(8.dp)) { ContextAction(actions) }
+                VolumeControl(pc, Modifier.align(Alignment.TopEnd).padding(4.dp))
             }
         }
     }
@@ -852,6 +856,37 @@ private fun InfoBar(actions: Actions) {
                 p is Playable.ClipItem -> Badge("CLIP", Color(0xFF3A3D41))
             }
         }
+    }
+}
+
+/** Mute button + volume slider (the player's own volume, like Xtra). */
+@Composable
+private fun VolumeControl(pc: PlayerController, modifier: Modifier) {
+    val volume by pc.volume.collectAsState()
+    val muted by pc.muted.collectAsState()
+    val silent = muted || volume == 0f
+    Row(
+        modifier.clip(RoundedCornerShape(50)).background(Color(0x66000000)).padding(end = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(onClick = { pc.toggleMute() }, modifier = Modifier.size(40.dp)) {
+            Icon(
+                painterResource(if (silent) R.drawable.ic_volume_off else R.drawable.ic_volume_up),
+                contentDescription = if (silent) "Unmute" else "Mute",
+                tint = Color.White,
+                modifier = Modifier.size(22.dp),
+            )
+        }
+        Slider(
+            value = if (muted) 0f else volume,
+            onValueChange = { pc.setVolume(it) },
+            modifier = Modifier.width(110.dp).height(28.dp),
+            colors = SliderDefaults.colors(
+                thumbColor = Color.White,
+                activeTrackColor = AccentViolet,
+                inactiveTrackColor = Color.White.copy(alpha = 0.3f),
+            ),
+        )
     }
 }
 

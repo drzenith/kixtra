@@ -184,6 +184,25 @@ class PlayerController(private val context: Context, private val store: Store) {
     val speed = MutableStateFlow(1f)
     val isPlaying = MutableStateFlow(false)
 
+    /** Player volume (0..1, remembered) and mute (not remembered). */
+    val volume = MutableStateFlow(store.volume)
+    val muted = MutableStateFlow(false)
+
+    fun setVolume(v: Float) {
+        val vol = v.coerceIn(0f, 1f)
+        volume.value = vol
+        muted.value = false
+        store.volume = vol
+        player.volume = vol
+    }
+
+    fun toggleMute() {
+        muted.value = !muted.value
+        // Unmuting from a slider at zero brings back an audible level.
+        if (!muted.value && volume.value == 0f) volume.value = 0.5f
+        player.volume = if (muted.value) 0f else volume.value
+    }
+
     /** Display aspect ratio of the current video (width / height). */
     val videoAspect = MutableStateFlow(16f / 9f)
 
@@ -224,6 +243,7 @@ class PlayerController(private val context: Context, private val store: Store) {
     private var lastRefreshAt = 0L
 
     init {
+        player.volume = store.volume
         player.addListener(object : Player.Listener {
             override fun onTracksChanged(tracks: Tracks) = rebuildQualities(tracks)
 
