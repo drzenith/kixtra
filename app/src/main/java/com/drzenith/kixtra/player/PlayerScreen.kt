@@ -1055,4 +1055,4 @@ fun MiniPlayer(actions: Actions, modifier: Modifier = Modifier) {
     }
 }
 
-private const val DEFAULT_CONTROLLER_TIMEOUT_MS = PlayerView.DEFAULT_SHOW_TIMEOUT_MS
+private const val DEFAULT_CONTROLLER_TIMEOUT_MS = 5_000 // Media3 default
