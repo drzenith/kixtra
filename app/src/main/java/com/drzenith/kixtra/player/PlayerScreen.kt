@@ -89,6 +89,9 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -155,6 +158,10 @@ class BarSpec(
     val onOverlayChat: () -> Unit = {},
     /** Show "● LIVE" instead of the time readout. */
     val atLive: Boolean = false,
+    /** Volume button: muted/silent icon, and whether its pop-up is open (keeps controls up). */
+    val silent: Boolean = false,
+    val volumeOpen: Boolean = false,
+    val onVolume: (View) -> Unit = {},
 )
 
 private class BarButtons(
@@ -164,6 +171,7 @@ private class BarButtons(
     val refresh: TextView,
     val sideChat: ImageButton,
     val overlayChat: ImageButton,
+    val volume: ImageButton,
 )
 
 /** Native popup menu anchored to a control-bar button. */
@@ -198,6 +206,10 @@ fun PlayerScreen(actions: Actions) {
     val scope = rememberCoroutineScope()
     var chatInLandscape by remember { mutableStateOf(false) }
     var controlsVisible by remember { mutableStateOf(true) }
+    // Volume pop-up: open flag + where to draw it (window px: button center x, top of the seek bar).
+    var volumeAnchor by remember { mutableStateOf<IntOffset?>(null) }
+    val volume by pc.volume.collectAsState()
+    val muted by pc.muted.collectAsState()
     var forceFullscreen by remember { mutableStateOf(false) }
     var scrub by remember { mutableStateOf<ScrubInfo?>(null) }
     val fullscreen = (landscape && !wide) || forceFullscreen
@@ -287,6 +299,9 @@ fun PlayerScreen(actions: Actions) {
         overlayChat = if (fullscreen && chat != null) overlayOn else null,
         onSideChat = { chatInLandscape = !chatInLandscape },
         atLive = atLive,
+        silent = muted || volume == 0f,
+        volumeOpen = volumeAnchor != null,
+        onVolume = { v -> volumeAnchor = if (volumeAnchor != null) null else volumeAnchorOf(v) },
         onOverlayChat = { overlayOn = !overlayOn },
     )
     val onScrub: (ScrubInfo?) -> Unit = { info ->
@@ -314,7 +329,7 @@ fun PlayerScreen(actions: Actions) {
             }
             VideoBox(
                 pc.player, Modifier.fillMaxSize(), useController = true, fullscreen = fullscreen,
-                onFullscreen = ::setFullscreen, onControls = { controlsVisible = it }, bar = bar, onScrub = onScrub,
+                onFullscreen = ::setFullscreen, onControls = { controlsVisible = it; if (!it) volumeAnchor = null }, bar = bar, onScrub = onScrub,
                 // With chat beside the video, sit the picture against the chat (no black gap).
                 alignEnd = chat != null && ((fullscreen && chatInLandscape) || (!fullscreen && wide)),
             )
@@ -342,7 +357,19 @@ fun PlayerScreen(actions: Actions) {
             }
             if (controlsVisible) {
                 Box(Modifier.align(Alignment.TopStart).padding(8.dp)) { ContextAction(actions) }
-                VolumeControl(pc, Modifier.align(Alignment.TopEnd).padding(4.dp))
+            }
+            val anchor = volumeAnchor
+            if (controlsVisible && anchor != null) {
+                val origin = sheet.videoCoords?.takeIf { it.isAttached }?.positionInWindow() ?: Offset.Zero
+                val margin = with(LocalDensity.current) { 6.dp.roundToPx() }
+                Box(Modifier.fillMaxSize().layout { m, c ->
+                    val pl = m.measure(c.copy(minWidth = 0, minHeight = 0))
+                    layout(c.maxWidth, c.maxHeight) {
+                        val x = (anchor.x - origin.x.toInt() - pl.width / 2).coerceIn(margin, (c.maxWidth - pl.width - margin).coerceAtLeast(margin))
+                        val y = (anchor.y - origin.y.toInt() - pl.height - margin).coerceAtLeast(margin)
+                        pl.place(x, y)
+                    }
+                }) { VolumeControl(pc) }
             }
         }
     }
@@ -749,6 +776,8 @@ internal fun VideoBox(
                         val r = barButton(ctx, "↻", sizeSp = 18f)
                         val sc = barIcon(ctx, R.drawable.ic_chat, "Side chat")
                         val oc = barIcon(ctx, R.drawable.ic_chat_overlay, "Pop-out chat")
+                        val vol = barIcon(ctx, R.drawable.ic_volume_up, "Volume")
+                        vol.setOnClickListener { v -> barRef.value?.onVolume?.invoke(v) }
                         q.setOnClickListener { v -> barRef.value?.onQuality?.invoke(v) }
                         s.setOnClickListener { v -> barRef.value?.onSpeed?.invoke(v) }
                         r.setOnClickListener { barRef.value?.onRefresh?.invoke() }
@@ -759,6 +788,7 @@ internal fun VideoBox(
                         basic.addView(r, 0)
                         basic.addView(s, 0)
                         basic.addView(q, 0)
+                        basic.addView(vol, 0)
                         // "● LIVE" in place of the time readout while at the live point (like kick.com).
                         val live = findViewById<ViewGroup>(androidx.media3.ui.R.id.exo_time)?.let { time ->
                             TextView(ctx).apply {
@@ -770,7 +800,7 @@ internal fun VideoBox(
                                 time.addView(this)
                             }
                         }
-                        tag = BarButtons(live, q, s, r, sc, oc)
+                        tag = BarButtons(live, q, s, r, sc, oc, vol)
                     }
                 }
                 setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { v -> ctl(v == View.VISIBLE) })
@@ -814,6 +844,13 @@ internal fun VideoBox(
                     }
                 }
                 b.overlayChat.alpha = if (spec.overlayChat == true) 1f else 0.55f
+                b.volume.setImageResource(if (spec.silent) R.drawable.ic_volume_off else R.drawable.ic_volume_up)
+                // Don't let the controls (and the pop-up with them) time out while adjusting volume.
+                val timeout = if (spec.volumeOpen) 0 else DEFAULT_CONTROLLER_TIMEOUT_MS
+                if (v.controllerShowTimeoutMs != timeout) {
+                    v.controllerShowTimeoutMs = timeout
+                    v.showController()
+                }
             }
         },
         onRelease = { it.player = null },
@@ -859,14 +896,29 @@ private fun InfoBar(actions: Actions) {
     }
 }
 
-/** Mute button + volume slider (the player's own volume, like Xtra). */
+/** Window position for the volume pop-up: above the seek bar, centered on the volume button. */
+private fun volumeAnchorOf(button: View): IntOffset {
+    val loc = IntArray(2)
+    button.getLocationInWindow(loc)
+    val cx = loc[0] + button.width / 2
+    var top = loc[1]
+    var v: View? = button
+    while (v != null && v !is PlayerView) v = v.parent as? View
+    v?.findViewById<View>(androidx.media3.ui.R.id.exo_progress)?.takeIf { it.isShown }?.let { bar ->
+        bar.getLocationInWindow(loc)
+        top = minOf(top, loc[1])
+    }
+    return IntOffset(cx, top)
+}
+
+/** Mute button + volume slider (the player's own volume, like Xtra), shown as a small pop-up. */
 @Composable
-private fun VolumeControl(pc: PlayerController, modifier: Modifier) {
+private fun VolumeControl(pc: PlayerController, modifier: Modifier = Modifier) {
     val volume by pc.volume.collectAsState()
     val muted by pc.muted.collectAsState()
     val silent = muted || volume == 0f
     Row(
-        modifier.clip(RoundedCornerShape(50)).background(Color(0x66000000)).padding(end = 10.dp),
+        modifier.clip(RoundedCornerShape(50)).background(Color(0xE6202020)).padding(end = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         IconButton(onClick = { pc.toggleMute() }, modifier = Modifier.size(40.dp)) {
@@ -1002,3 +1054,5 @@ fun MiniPlayer(actions: Actions, modifier: Modifier = Modifier) {
         }
     }
 }
+
+private const val DEFAULT_CONTROLLER_TIMEOUT_MS = PlayerView.DEFAULT_SHOW_TIMEOUT_MS
