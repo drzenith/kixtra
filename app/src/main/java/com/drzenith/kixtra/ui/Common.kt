@@ -52,6 +52,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import androidx.compose.ui.platform.LocalContext
 import com.drzenith.kixtra.App
 import com.drzenith.kixtra.chat.parseKickTime
 import com.drzenith.kixtra.data.Category
@@ -153,13 +155,25 @@ fun Badge(text: String, color: Color, textColor: Color = Color.White, modifier: 
     )
 }
 
+/**
+ * 16:9 thumbnail. [refreshKey]: Kick reuses the same address for a channel's live thumbnail, so
+ * live cards pass a key that changes every couple of minutes to fetch a fresh one.
+ */
 @Composable
-fun Thumb(url: String?, modifier: Modifier = Modifier, overlay: @Composable () -> Unit = {}) {
+fun Thumb(url: String?, modifier: Modifier = Modifier, refreshKey: Long? = null, overlay: @Composable () -> Unit = {}) {
+    val context = LocalContext.current
+    val model = remember(url, refreshKey) {
+        if (url == null || refreshKey == null) url
+        else ImageRequest.Builder(context).data(url)
+            .memoryCacheKey("$url#$refreshKey")
+            .diskCacheKey("$url#$refreshKey")
+            .build()
+    }
     Box(
         modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(8.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
     ) {
-        AsyncImage(model = url, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+        AsyncImage(model = model, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
         overlay()
     }
 }
@@ -188,7 +202,8 @@ fun StreamCard(item: StreamItem, onClick: () -> Unit, onChannel: () -> Unit) {
         else (saved.toFloat() / (now - started)).coerceIn(0f, 1f)
     }
     Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 8.dp)) {
-        Thumb(item.thumbnail) {
+        // Always the stream's current picture (refreshed every ~2 min), whatever your saved spot.
+        Thumb(item.thumbnail, refreshKey = now / 120_000) {
             Box(Modifier.fillMaxSize().padding(6.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     Badge("LIVE", LiveRed)
@@ -228,7 +243,7 @@ fun VideoCard(video: Video, progressMs: Long, onClick: () -> Unit) {
     }
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 6.dp)) {
         Box(Modifier.width(160.dp)) {
-            Thumb(video.thumbnail) {
+            Thumb(video.thumbnail, refreshKey = if (video.isLive) now / 120_000 else null) {
                 Box(Modifier.fillMaxSize().padding(4.dp)) {
                     if (video.isLive) Badge("LIVE", LiveRed, modifier = Modifier.align(Alignment.TopStart))
                     if (video.durationMs > 0) {

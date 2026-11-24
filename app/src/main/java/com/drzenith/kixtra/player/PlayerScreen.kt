@@ -10,6 +10,7 @@ import android.content.res.Configuration
 import android.graphics.Typeface
 import android.os.Build
 import android.util.TypedValue
+import android.os.SystemClock
 import android.view.Gravity
 import android.view.LayoutInflater
 import androidx.compose.foundation.Image
@@ -133,6 +134,10 @@ tailrec fun Context.findActivity(): Activity? = when (this) {
     else -> null
 }
 
+/** What the seek bar is doing: where you're scrubbing to, where playback is now, and whether
+ *  you're close enough to "now" that letting go cancels the scrub. */
+data class ScrubInfo(val position: Long, val current: Long, val snapped: Boolean)
+
 /** Quality / speed / refresh buttons that live in Media3's own control bar, next to fullscreen. */
 class BarSpec(
     val quality: String,
@@ -191,7 +196,7 @@ fun PlayerScreen(actions: Actions) {
     var chatInLandscape by remember { mutableStateOf(false) }
     var controlsVisible by remember { mutableStateOf(true) }
     var forceFullscreen by remember { mutableStateOf(false) }
-    var scrubPos by remember { mutableStateOf<Long?>(null) }
+    var scrub by remember { mutableStateOf<ScrubInfo?>(null) }
     val fullscreen = (landscape && !wide) || forceFullscreen
     val notice by pc.notice.collectAsState()
     LaunchedEffect(notice) {
@@ -281,10 +286,10 @@ fun PlayerScreen(actions: Actions) {
         atLive = atLive,
         onOverlayChat = { overlayOn = !overlayOn },
     )
-    val onScrub: (Long?) -> Unit = { pos ->
+    val onScrub: (ScrubInfo?) -> Unit = { info ->
         if (seekable) {
-            scrubPos = pos
-            if (pos != null) pc.previewScrub(pos) else pc.scrubEnded()
+            scrub = info
+            if (info != null) pc.previewScrub(info.position) else pc.scrubEnded()
         }
     }
 
@@ -327,7 +332,7 @@ fun PlayerScreen(actions: Actions) {
                         .background(Color(0xCC000000)).padding(horizontal = 10.dp, vertical = 6.dp),
                 )
             }
-            scrubPos?.let { pos -> ScrubPreview(pc, pos, pc.player.duration) }
+            scrub?.let { info -> ScrubPreview(pc, info, pc.player.duration) }
             val c = chat
             if (fullscreen && overlayOn && c != null) {
                 OverlayChat(c, actions) { overlayOn = false }
@@ -425,7 +430,8 @@ private fun ChatResizeHandle(onDrag: (androidx.compose.ui.unit.Dp) -> Unit, onDr
 
 /** Small frame preview + timestamp that follows the scrub position along the seek bar. */
 @Composable
-private fun ScrubPreview(pc: PlayerController, posMs: Long, durationMs: Long) {
+private fun ScrubPreview(pc: PlayerController, info: ScrubInfo, durationMs: Long) {
+    val posMs = info.position
     val track by pc.thumbTrack.collectAsState()
     val frameVersion by pc.frameVersion.collectAsState()
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -466,14 +472,21 @@ private fun ScrubPreview(pc: PlayerController, posMs: Long, durationMs: Long) {
                     }
                 }
             }
-            Text(
-                hms(posMs),
-                color = Color.White,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(top = 2.dp).background(Color(0x99000000), RoundedCornerShape(4.dp))
-                    .padding(horizontal = 6.dp, vertical = 1.dp),
-            )
+            Column(
+                Modifier.padding(top = 2.dp).background(Color(0xB3000000), RoundedCornerShape(4.dp))
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    if (info.snapped) "↩ Back to where you were" else hms(posMs),
+                    color = if (info.snapped) AccentCyan else Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                if (!info.snapped) {
+                    Text("Now ${hms(info.current)}", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
+                }
+            }
         }
     }
 }
@@ -650,7 +663,7 @@ internal fun VideoBox(
     onFullscreen: (Boolean) -> Unit,
     onControls: (Boolean) -> Unit,
     bar: BarSpec? = null,
-    onScrub: ((Long?) -> Unit)? = null,
+    onScrub: ((ScrubInfo?) -> Unit)? = null,
     textureView: Boolean = true,
     alignEnd: Boolean = false,
 ) {
@@ -683,16 +696,43 @@ internal fun VideoBox(
                     setPlayedColor(AccentViolet.toArgb())
                     setScrubberColor(AccentCyan.toArgb())
                     setBufferedColor(0x66FFFFFF)
+                    // Marker on the seek bar showing where you are while you scrub.
+                    setAdMarkerColor(AccentCyan.toArgb())
+                    setPlayedAdMarkerColor(AccentCyan.toArgb())
+                    val playerView = view
+                    val bar = this
                     addListener(object : TimeBar.OnScrubListener {
-                        override fun onScrubStart(timeBar: TimeBar, position: Long) {
-                            scrubRef.value?.invoke(position)
+                        // Playback keeps going while you scrub; remember where it is.
+                        var current = 0L
+                        var currentAt = 0L
+                        var snapped = false
+
+                        fun update(position: Long) {
+                            current = player.currentPosition
+                            currentAt = SystemClock.elapsedRealtime()
+                            // Releasing within ~a fingertip of your current spot cancels the scrub.
+                            val dur = player.duration
+                            val px = 14 * resources.displayMetrics.density
+                            val snapMs = if (dur > 0 && bar.width > 0) (dur * px / bar.width).toLong() else 0L
+                            snapped = snapMs > 0 && abs(position - current) <= snapMs
+                            playerView.setExtraAdGroupMarkers(longArrayOf(current), booleanArrayOf(false))
+                            scrubRef.value?.invoke(ScrubInfo(if (snapped) current else position, current, snapped))
                         }
 
-                        override fun onScrubMove(timeBar: TimeBar, position: Long) {
-                            scrubRef.value?.invoke(position)
-                        }
+                        override fun onScrubStart(timeBar: TimeBar, position: Long) = update(position)
+
+                        override fun onScrubMove(timeBar: TimeBar, position: Long) = update(position)
 
                         override fun onScrubStop(timeBar: TimeBar, position: Long, canceled: Boolean) {
+                            playerView.setExtraAdGroupMarkers(null, null)
+                            if (snapped && !canceled) {
+                                // The player already jumped to where you let go; put it back where it
+                                // would be now had you not scrubbed.
+                                val elapsed = SystemClock.elapsedRealtime() - currentAt
+                                val back = current + if (player.isPlaying) (elapsed * player.playbackParameters.speed).toLong() else 0L
+                                player.seekTo(back)
+                            }
+                            snapped = false
                             scrubRef.value?.invoke(null)
                         }
                     })

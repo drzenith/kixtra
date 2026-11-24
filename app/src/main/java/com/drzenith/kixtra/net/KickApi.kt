@@ -12,6 +12,8 @@ import com.drzenith.kixtra.data.StreamItem
 import com.drzenith.kixtra.data.Video
 import kotlinx.serialization.json.JsonObject
 import java.net.URLEncoder
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 
 /**
  * Kick's undocumented endpoints, as used by kick.com, its app, yt-dlp, streamlink and other
@@ -313,26 +315,52 @@ object KickApi {
 
     // ---------- Search ----------
 
-    suspend fun search(query: String): SearchResults {
+    /**
+     * Search. The "enriched" endpoint has viewer counts; the plain one sometimes finds more; the
+     * older kick.com search lists more categories. All three are queried together and merged.
+     */
+    suspend fun search(query: String): SearchResults = coroutineScope {
         val q = enc(query.trim())
-        val el = runCatching { Http.getJson("https://search.kick.com/api/v1/search?query=$q") }
-            .getOrElse { Http.getJson("https://search.kick.com/api/v1/search/enriched?query=$q") }
-        val data = el.obj().o("data") ?: el.obj()
-        val channels = data.a("channels").objects().mapNotNull { c ->
-            val slug = c.s("slug") ?: return@mapNotNull null
+        val enriched = async { runCatching { Http.getJson("https://search.kick.com/api/v1/search/enriched?query=$q") }.getOrNull() }
+        val plain = async { runCatching { Http.getJson("https://search.kick.com/api/v1/search?query=$q") }.getOrNull() }
+        val legacy = async { runCatching { Http.getJson("https://kick.com/api/search?searched_word=$q") }.getOrNull() }
+        val sources = listOfNotNull(enriched.await(), plain.await())
+        val legacyData = legacy.await().obj()
+        if (sources.isEmpty() && legacyData == null) throw ApiException(0, "Search failed")
+
+        val channels = mutableListOf<ChannelHit>()
+        val streams = mutableListOf<StreamItem>()
+        val categories = mutableListOf<Category>()
+        for (el in sources) {
+            val data = el.obj().o("data") ?: el.obj()
+            data.a("channels").objects().mapNotNullTo(channels) { c ->
+                val slug = c.s("slug") ?: return@mapNotNullTo null
+                ChannelHit(
+                    slug = slug,
+                    username = c.s("username") ?: slug,
+                    avatar = c.s("profile_picture") ?: c.s("profile_pic"),
+                    isLive = c.b("is_live") ?: false,
+                    verified = c.b("is_verified") ?: false,
+                )
+            }
+            data.a("livestreams").objects().mapNotNullTo(streams, ::parseStream)
+            data.a("categories").objects().mapNotNullTo(categories, ::parseCategory)
+        }
+        legacyData.a("channels").objects().mapNotNullTo(channels) { c ->
+            val slug = c.s("slug") ?: return@mapNotNullTo null
             ChannelHit(
                 slug = slug,
-                username = c.s("username") ?: slug,
-                avatar = c.s("profile_picture") ?: c.s("profile_pic"),
-                isLive = c.b("is_live") ?: false,
-                verified = c.b("is_verified") ?: false,
+                username = c.o("user").s("username") ?: c.s("username") ?: slug,
+                avatar = c.o("user").s("profile_pic") ?: c.s("profile_pic"),
+                isLive = c.b("is_live") ?: (c["livestream"] is JsonObject),
+                verified = c.b("verified") ?: false,
             )
         }
-        val streams = data.a("livestreams").objects().mapNotNull(::parseStream)
-        val categories = data.a("categories").objects().mapNotNull(::parseCategory)
-        return SearchResults(
-            channels.distinctBy { it.slug },
-            streams.distinctBy { it.slug },
+        legacyData.a("categories").objects().mapNotNullTo(categories, ::parseCategory)
+        SearchResults(
+            channels.distinctBy { it.slug.lowercase() },
+            // Same stream from two sources: keep the one that has a viewer count.
+            streams.groupBy { it.slug.lowercase() }.map { (_, dupes) -> dupes.maxBy { it.viewers } },
             categories.distinctBy { it.slug },
         )
     }

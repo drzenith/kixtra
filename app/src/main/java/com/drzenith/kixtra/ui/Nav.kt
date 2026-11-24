@@ -109,6 +109,7 @@ sealed class Screen {
         /** 0 all, 1 channels, 2 live, 3 categories */
         var type by mutableIntStateOf(0)
         var liveOnly by mutableStateOf(false)
+        var showAllChannels by mutableStateOf(false)
         var language by mutableStateOf("")
         val list = LazyListState()
     }

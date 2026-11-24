@@ -94,6 +94,28 @@ class Store(context: Context) {
     fun wasLive(key: String): Boolean = prefs.getBoolean("live_$key", false)
     fun saveWasLive(key: String, live: Boolean) = prefs.edit { putBoolean("live_$key", live) }
 
+    // ---- Search history (newest first) ----
+    private val _searchHistory = MutableStateFlow(loadHistory())
+    val searchHistory: StateFlow<List<String>> = _searchHistory
+
+    private fun loadHistory(): List<String> = runCatching {
+        val arr = JSONArray(prefs.getString("search_history", "[]"))
+        (0 until arr.length()).map { arr.getString(it) }
+    }.getOrDefault(emptyList())
+
+    private fun saveHistory(list: List<String>) {
+        prefs.edit { putString("search_history", JSONArray(list).toString()) }
+        _searchHistory.value = list
+    }
+
+    fun addSearch(query: String) {
+        val q = query.trim()
+        if (q.length < 2) return
+        saveHistory((listOf(q) + _searchHistory.value.filterNot { it.equals(q, true) }).take(20))
+    }
+
+    fun removeSearch(query: String) = saveHistory(_searchHistory.value.filterNot { it == query })
+
     // ---- Follows ----
     private val _follows = MutableStateFlow(loadFollows())
     val follows: StateFlow<List<FollowedChannel>> = _follows

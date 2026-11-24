@@ -18,6 +18,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.foundation.clickable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
@@ -45,6 +49,7 @@ fun SearchScreen(state: Screen.Search, actions: Actions) {
         val q = state.query.trim()
         jobHolder[0]?.cancel()
         if (q.length < 2) return
+        state.showAllChannels = false
         jobHolder[0] = scope.launch {
             if (!immediate) delay(400)
             state.results.loading = true
@@ -61,6 +66,14 @@ fun SearchScreen(state: Screen.Search, actions: Actions) {
     }
 
     LaunchedEffect(Unit) { if (state.query.isEmpty()) runCatching { focus.requestFocus() } }
+    val history by actions.store.searchHistory.collectAsState()
+    // A search counts for history once you submit it or open one of its results.
+    fun saveQuery() = actions.store.addSearch(state.query)
+    fun runFromHistory(q: String) {
+        state.query = q
+        search(true)
+        actions.store.addSearch(q)
+    }
 
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(end = 8.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -76,7 +89,7 @@ fun SearchScreen(state: Screen.Search, actions: Actions) {
                     }
                 }) else null,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { search(true) }),
+                keyboardActions = KeyboardActions(onSearch = { search(true); saveQuery() }),
                 modifier = Modifier.weight(1f).focusRequester(focus),
             )
         }
@@ -102,15 +115,41 @@ fun SearchScreen(state: Screen.Search, actions: Actions) {
         val categories = if (!showCategories || r == null) emptyList() else r.categories
 
         LazyColumn(Modifier.fillMaxSize(), state = state.list) {
+            // Recent searches while the box is empty.
+            if (state.query.isBlank()) {
+                if (history.isNotEmpty()) item { SectionTitle("Recent searches") }
+                items(history, key = { "h_$it" }) { q ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { runFromHistory(q) }.padding(start = 16.dp, end = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(q, modifier = Modifier.weight(1f).padding(vertical = 12.dp))
+                        IconButton(onClick = { actions.store.removeSearch(q) }) {
+                            Icon(Icons.Filled.Clear, contentDescription = "Remove from history")
+                        }
+                    }
+                }
+                return@LazyColumn
+            }
             if (state.results.loading && r == null) item { LoadingBox() }
             state.results.error?.let { err -> item { ErrorBox(err) { search(true) } } }
             if (r != null && channels.isEmpty() && streams.isEmpty() && categories.isEmpty()) {
                 item { EmptyBox("No results") }
             }
             if (channels.isNotEmpty()) item { SectionTitle("Channels") }
-            items(channels, key = { "c_" + it.slug }) { c ->
+            // A few channels first; "Show more" for the rest (or all of them in the Channels filter).
+            val shown = if (state.type == 1 || state.showAllChannels) channels else channels.take(5)
+            items(shown, key = { "c_" + it.slug }) { c ->
                 ChannelRow(c.avatar, c.username, if (c.verified) "Verified" else null, c.isLive) {
+                    saveQuery()
                     actions.openChannel(c.slug)
+                }
+            }
+            if (shown.size < channels.size) {
+                item {
+                    TextButton(onClick = { state.showAllChannels = true }, modifier = Modifier.padding(start = 4.dp)) {
+                        Text("Show more (${channels.size - shown.size})")
+                    }
                 }
             }
             if (categories.isNotEmpty()) {
@@ -119,7 +158,10 @@ fun SearchScreen(state: Screen.Search, actions: Actions) {
                     LazyRow {
                         items(categories, key = { "cat_" + it.slug }) { cat ->
                             Column(Modifier.width(120.dp)) {
-                                CategoryCard(cat) { actions.openCategory(cat.slug, cat.name, cat.id) }
+                                CategoryCard(cat) {
+                                    saveQuery()
+                                    actions.openCategory(cat.slug, cat.name, cat.id)
+                                }
                             }
                         }
                     }
@@ -127,7 +169,11 @@ fun SearchScreen(state: Screen.Search, actions: Actions) {
             }
             if (streams.isNotEmpty()) item { SectionTitle("Live streams") }
             items(streams, key = { "s_" + it.slug }) { s ->
-                StreamCard(s, onClick = { actions.openLive(s.slug) }, onChannel = { actions.openChannel(s.slug) })
+                StreamCard(
+                    s,
+                    onClick = { saveQuery(); actions.openLive(s.slug) },
+                    onChannel = { saveQuery(); actions.openChannel(s.slug) },
+                )
             }
         }
     }
