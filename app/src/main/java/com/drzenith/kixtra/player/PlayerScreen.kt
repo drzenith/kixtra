@@ -478,7 +478,7 @@ private fun ScrubPreview(pc: PlayerController, info: ScrubInfo, durationMs: Long
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(
-                    if (info.snapped) "↩ Back to where you were" else hms(posMs),
+                    if (info.snapped) "Resume" else hms(posMs),
                     color = if (info.snapped) AccentCyan else Color.White,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -710,9 +710,9 @@ internal fun VideoBox(
                         fun update(position: Long) {
                             current = player.currentPosition
                             currentAt = SystemClock.elapsedRealtime()
-                            // Releasing within ~a fingertip of your current spot cancels the scrub.
+                            // Releasing right on your current spot (within ~6dp) cancels the scrub.
                             val dur = player.duration
-                            val px = 14 * resources.displayMetrics.density
+                            val px = 6 * resources.displayMetrics.density
                             val snapMs = if (dur > 0 && bar.width > 0) (dur * px / bar.width).toLong() else 0L
                             snapped = snapMs > 0 && abs(position - current) <= snapMs
                             playerView.setExtraAdGroupMarkers(longArrayOf(current), booleanArrayOf(false))
