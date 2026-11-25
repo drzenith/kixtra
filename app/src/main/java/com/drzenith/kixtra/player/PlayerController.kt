@@ -312,6 +312,23 @@ class PlayerController(private val context: Context, private val store: Store) {
                     player.prepare()
                     return
                 }
+                // A live VOD whose stream just ended: Kick retires the recording's playlist, so
+                // continue in the finished VOD instead of reloading the dead one.
+                if (p is Playable.Vod && p.growing) {
+                    if (endJob?.isActive == true) return
+                    endJob = scope.launch {
+                        if (streamEnded(p)) switchToFinishedVod(p)
+                        else if (current.value == p) handleError(e, p)
+                    }
+                    return
+                }
+                handleError(e, p)
+            }
+        })
+        initLoops()
+    }
+
+    private fun handleError(e: PlaybackException, p: Playable?) {
                 // Kick's playlist didn't grow when re-checked: fall back to reloading fresh copies.
                 val stuck = generateSequence(e as Throwable) { it.cause }
                     .any { it is HlsPlaylistTracker.PlaylistStuckException }
@@ -327,8 +344,69 @@ class PlayerController(private val context: Context, private val store: Store) {
                 } else {
                     error.value = "Playback error: ${e.errorCodeName}"
                 }
+    }
+
+    // ---------- Live VOD -> finished VOD ----------
+    // When a stream ends, Kick retires the live recording's playlist (its parts stop loading,
+    // even the ones you haven't reached yet) and publishes the finished VOD separately. So once
+    // the stream is over we move to the finished VOD at the same spot.
+
+    private var endJob: Job? = null
+
+    /** Is the stream behind this live VOD over? (Offline, or live again with a new stream.) */
+    private suspend fun streamEnded(p: Playable.Vod): Boolean {
+        val ch = runCatching { KickApi.channel(p.channel.slug) }.getOrNull() ?: return false
+        val live = ch.live ?: return true
+        return p.video.livestreamId > 0 && live.id != p.video.livestreamId
+    }
+
+    /** Waits (up to ~10 min) for Kick to list the finished VOD, then continues in it. */
+    private suspend fun switchToFinishedVod(p: Playable.Vod) {
+        Log.i(tag, "Stream ended; looking for the finished VOD")
+        repeat(20) { attempt ->
+            if (current.value != p) return
+            val ch = runCatching { KickApi.channel(p.channel.slug) }.getOrNull()
+            val vod = runCatching { KickApi.videos(p.channel.slug) }.getOrNull()
+                ?.firstOrNull { it.livestreamId == p.video.livestreamId && !it.isLive }
+            if (ch != null && vod != null) {
+                if (current.value != p) return
+                val pos = player.currentPosition.coerceAtLeast(0)
+                val wasPlaying = player.playWhenReady
+                notice.value = "Stream ended, continuing in the VOD"
+                play(Playable.Vod(ch.copy(live = null), vod), startAtMs = pos)
+                if (!wasPlaying) player.pause()
+                return
             }
-        })
+            if (attempt == 0) notice.value = "Stream ended, waiting for Kick to publish the VOD…"
+            delay(30_000)
+        }
+        if (current.value == p) error.value = "The stream ended and Kick hasn't published its VOD yet"
+    }
+
+    private fun initLoops() {
+        // While watching a live VOD: check now and then whether the stream has ended, and right
+        // away if playback stalls.
+        scope.launch {
+            var lastCheck = System.currentTimeMillis()
+            var stalledSince = 0L
+            while (isActive) {
+                delay(5_000)
+                val p = current.value as? Playable.Vod
+                if (p == null || !p.growing || loading.value) {
+                    stalledSince = 0L
+                    continue
+                }
+                val now = System.currentTimeMillis()
+                val stalled = player.playWhenReady && player.playbackState == Player.STATE_BUFFERING
+                stalledSince = if (stalled) (stalledSince.takeIf { it > 0 } ?: now) else 0L
+                val due = now - lastCheck > 90_000 || (stalledSince > 0 && now - stalledSince > 15_000)
+                if (due && endJob?.isActive != true) {
+                    lastCheck = now
+                    stalledSince = 0L
+                    endJob = scope.launch { if (streamEnded(p)) switchToFinishedVod(p) }
+                }
+            }
+        }
         // Catching up to live at >1x: drop to 1x right before the live point instead of stalling.
         scope.launch {
             while (isActive) {
@@ -629,9 +707,8 @@ class PlayerController(private val context: Context, private val store: Store) {
         refreshJob = scope.launch {
             val wait = 15_000 - (System.currentTimeMillis() - lastRefreshAt)
             if (wait > 0) delay(wait)
-            // Stream over? Then this really is the end.
-            val stillLive = runCatching { KickApi.channel(p.channel.slug).live != null }.getOrDefault(true)
-            if (stillLive) reload(keepPosition = true)
+            // Stream over? Then continue in (or finish on) the published VOD.
+            if (streamEnded(p)) switchToFinishedVod(p) else reload(keepPosition = true)
         }
     }
 
