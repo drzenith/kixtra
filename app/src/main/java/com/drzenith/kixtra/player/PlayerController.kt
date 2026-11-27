@@ -173,6 +173,22 @@ class PlayerController(private val context: Context, private val store: Store) {
      * never reaches the end before the next batch of video arrives (the player's own default is
      * three segments, ~1 minute).
      */
+    /**
+     * How far behind the stream's real "now" a position is. The playlist grows in batches, so
+     * "time left in the playlist" saw-tooths while you play at 1x; adding the time since it last
+     * grew gives a steady number. (At 1x you never get closer to live, so LIVE is only entered by
+     * Go live, catching up at >1x, or skipping forward to it, never by just playing.)
+     */
+    private fun liveLagMs(positionMs: Long): Long {
+        val since = if (lastGrowthAt > 0) {
+            (android.os.SystemClock.elapsedRealtime() - lastGrowthAt).coerceIn(0, growthCadenceMs())
+        } else 0L
+        return player.duration + since - positionMs
+    }
+
+    /** Largest lag that still counts as live: the live point plus one growth step, plus slack. */
+    private fun liveLagLimitMs(): Long = liveEdgeOffsetMs() + growthCadenceMs() + 1_500
+
     private fun liveEdgeOffsetMs(): Long =
         maxOf(targetDurationMs() + 2_000, growthCadenceMs() + 3_000).coerceIn(4_000, 60_000)
 
@@ -274,7 +290,8 @@ class PlayerController(private val context: Context, private val store: Store) {
                         atLive.value = true
                     }
                     newPosition.positionMs < oldPosition.positionMs -> atLive.value = false
-                    newRemaining <= edge + 1_000 -> atLive.value = true
+                    // Skipped forward to (about) as close as live gets.
+                    liveLagMs(newPosition.positionMs) <= liveLagLimitMs() -> atLive.value = true
                 }
             }
 
@@ -425,9 +442,7 @@ class PlayerController(private val context: Context, private val store: Store) {
                     player.setPlaybackSpeed(1f)
                     atLive.value = true
                     notice.value = "Caught up to live, playing at 1x"
-                } else if (!atLive.value && player.isPlaying && remaining <= edge + 1_000) {
-                    atLive.value = true
-                } else if (atLive.value && remaining > edge + growthCadenceMs() + 10_000) {
+                } else if (atLive.value && liveLagMs(player.currentPosition) > liveLagLimitMs() + 10_000) {
                     // Fell well behind (e.g. a long buffer): no longer live.
                     atLive.value = false
                 }
