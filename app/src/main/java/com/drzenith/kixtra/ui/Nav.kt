@@ -45,15 +45,50 @@ class Paged<T>(private val keyOf: (T) -> String) {
         error = null
     }
 
+    /** When the first page was last (re)loaded. */
+    var loadedAt = 0L
+        private set
+    /** A refresh of the first page is running (items stay on screen meanwhile). */
+    var refreshing by mutableStateOf(false)
+
+    /** Reloads the first page and swaps it in, without blanking the list first. */
+    fun refresh(scope: CoroutineScope, fetch: suspend (String?) -> Page<T>) {
+        if (refreshing) return
+        generation++
+        val gen = generation
+        refreshing = true
+        loading = false
+        scope.launch {
+            try {
+                val page = fetch(null)
+                if (gen != generation) return@launch
+                items.clear()
+                items.addAll(page.items.distinctBy(keyOf))
+                cursor = page.next
+                end = page.next == null || page.items.isEmpty()
+                error = null
+                loadedAt = System.currentTimeMillis()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (gen == generation && items.isEmpty()) error = e.message ?: "Couldn't load"
+            } finally {
+                refreshing = false
+            }
+        }
+    }
+
     fun loadMore(scope: CoroutineScope, fetch: suspend (String?) -> Page<T>) {
-        if (loading || end) return
+        if (loading || end || refreshing) return
         loading = true
         error = null
         val gen = generation
         scope.launch {
             try {
+                val first = cursor == null
                 val page = fetch(cursor)
                 if (gen != generation) return@launch
+                if (first) loadedAt = System.currentTimeMillis()
                 val known = items.map(keyOf).toHashSet()
                 items.addAll(page.items.filter { keyOf(it) !in known })
                 cursor = page.next
@@ -90,6 +125,8 @@ sealed class Screen {
         var tab by mutableIntStateOf(0)
         val follows = Loadable<List<Channel>>()
         var followsLoadedAt = 0L
+        /** Show the refresh spinner for this follows refresh (data was stale, e.g. after returning). */
+        var followsVisibleRefresh by mutableStateOf(false)
         /** Live thumbnails for followed channels, from the same source as the Live tab. */
         val followThumbs = mutableStateMapOf<String, String>()
         val streams = streamPaged()

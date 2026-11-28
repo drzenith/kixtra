@@ -219,6 +219,9 @@ class PlayerController(private val context: Context, private val store: Store) {
         player.volume = if (muted.value) 0f else volume.value
     }
 
+    /** Where the video is on screen (window px), so PiP can grow out of / shrink into it. */
+    val videoRect = MutableStateFlow<android.graphics.Rect?>(null)
+
     /** Display aspect ratio of the current video (width / height). */
     val videoAspect = MutableStateFlow(16f / 9f)
 

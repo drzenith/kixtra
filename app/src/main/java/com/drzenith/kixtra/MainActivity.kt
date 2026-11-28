@@ -9,6 +9,7 @@ import android.content.IntentFilter
 import android.graphics.drawable.Icon
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import android.content.ComponentName
 import android.content.Intent
@@ -88,11 +89,13 @@ class MainActivity : ComponentActivity() {
         actions = Actions(nav, app.playerController, app.store)
 
         ContextCompat.registerReceiver(this, pipReceiver, IntentFilter(ACTION_PIP), ContextCompat.RECEIVER_NOT_EXPORTED)
-        // Keep the PiP play/pause button in step with playback.
+        // Keep the PiP params current: play/pause button, video position (for the zoom
+        // animation) and, on Android 12+, auto-enter while playing, so going home shrinks the
+        // video straight into PiP without it disappearing first.
         lifecycleScope.launch {
-            app.playerController.isPlaying.collect {
-                if (isInPictureInPictureMode) runCatching { setPictureInPictureParams(pipParams()) }
-            }
+            val pc = app.playerController
+            combine(pc.isPlaying, pc.current, pc.videoRect, pc.videoAspect) { _, _, _, _ -> }
+                .collect { updatePipParams() }
         }
 
         addOnPictureInPictureModeChangedListener(Consumer { info ->
@@ -231,9 +234,19 @@ class MainActivity : ComponentActivity() {
         app.store.pipEnabled && app.playerController.current.value != null && app.playerController.player.isPlaying &&
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
 
+    private fun updatePipParams() {
+        runCatching { setPictureInPictureParams(pipParams()) }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        updatePipParams() // the PiP setting may have changed
+    }
+
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        if (shouldEnterPip()) {
+        // Android 12+ enters PiP by itself (auto-enter), earlier versions need asking.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S && shouldEnterPip()) {
             runCatching {
                 enterPictureInPictureMode(pipParams())
             }
@@ -282,10 +295,27 @@ class MainActivity : ComponentActivity() {
         } else {
             listOf(toggle)
         }
-        return PictureInPictureParams.Builder()
-            .setAspectRatio(Rational(16, 9))
+        val aspect = pc.videoAspect.value.takeIf { it.isFinite() && it > 0f }?.coerceIn(0.42f, 2.39f) ?: (16f / 9f)
+        val builder = PictureInPictureParams.Builder()
+            .setAspectRatio(Rational((aspect * 1000).toInt(), 1000))
             .setActions(actions)
-            .build()
+        // The video's spot on screen (the picture itself, without black bars).
+        pc.videoRect.value?.takeIf { it.width() > 0 && it.height() > 0 }?.let { box ->
+            val boxAspect = box.width().toFloat() / box.height()
+            val hint = if (boxAspect > aspect) {
+                val w = (box.height() * aspect).toInt()
+                android.graphics.Rect(box.centerX() - w / 2, box.top, box.centerX() - w / 2 + w, box.bottom)
+            } else {
+                val h = (box.width() / aspect).toInt()
+                android.graphics.Rect(box.left, box.centerY() - h / 2, box.right, box.centerY() - h / 2 + h)
+            }
+            builder.setSourceRectHint(hint)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            builder.setAutoEnterEnabled(shouldEnterPip())
+            builder.setSeamlessResizeEnabled(true)
+        }
+        return builder.build()
     }
 
     override fun onDestroy() {

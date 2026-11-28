@@ -32,6 +32,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
@@ -65,16 +68,28 @@ fun HomeScreen(state: Screen.Home, actions: Actions) {
     val scope = rememberCoroutineScope()
     val follows by actions.store.follows.collectAsState()
 
-    // Keep follows' live status fresh while Home is showing (used by Following and Live tabs).
+    // Keep follows' live status and the Live list fresh while Home is on screen, and refresh
+    // right away when you come back to the app (the loop pauses while the app is in the
+    // background, then runs again on return).
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(follows) {
-        if (state.follows.data == null || System.currentTimeMillis() - state.followsLoadedAt > 60_000 ||
-            state.follows.data?.size != follows.size
-        ) {
-            refreshFollows(state, follows, actions.store, scope)
-        }
-        while (true) {
-            delay(120_000)
-            refreshFollows(state, follows, actions.store, scope)
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                val now = System.currentTimeMillis()
+                val followsAge = now - state.followsLoadedAt
+                if (state.follows.data == null || followsAge > 60_000 || state.follows.data?.size != follows.size) {
+                    // Old enough that the list may be wrong: show that it's updating.
+                    if (state.follows.data != null && followsAge > 3 * 60_000) state.followsVisibleRefresh = true
+                    refreshFollows(state, follows, actions.store, scope)
+                }
+                val s = state.streams
+                if (s.items.isNotEmpty() && now - s.loadedAt > 3 * 60_000 &&
+                    (now - s.loadedAt > 10 * 60_000 || state.streamsGrid.firstVisibleItemIndex < 6)
+                ) {
+                    refreshStreams(state, scope)
+                }
+                delay(15_000)
+            }
         }
     }
 
@@ -148,6 +163,7 @@ private fun refreshFollows(state: Screen.Home, follows: List<FollowedChannel>, s
             state.follows.error = e.message
         } finally {
             state.follows.loading = false
+            state.followsVisibleRefresh = false
         }
     }
 }
@@ -221,7 +237,7 @@ private fun FollowingTab(state: Screen.Home, follows: List<FollowedChannel>, act
     LaunchedEffect(state.follows.loading) { if (!state.follows.loading) pulled = false }
 
     PullToRefreshBox(
-        isRefreshing = pulled && state.follows.loading,
+        isRefreshing = (pulled || state.followsVisibleRefresh) && state.follows.loading,
         onRefresh = {
             pulled = true
             refreshFollows(state, follows, actions.store, scope)
@@ -258,6 +274,12 @@ private fun loadStreams(state: Screen.Home, scope: CoroutineScope) {
     state.streams.loadMore(scope) { cursor -> KickApi.liveStreams(cursor, null, f.language, f.sort) }
 }
 
+private fun refreshStreams(state: Screen.Home, scope: CoroutineScope) {
+    val f = state.streamFilters
+    state.streams.refresh(scope) { cursor -> KickApi.liveStreams(cursor, null, f.language, f.sort) }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun LiveTab(state: Screen.Home, actions: Actions, scope: CoroutineScope) {
     val follows by actions.store.follows.collectAsState()
@@ -268,6 +290,17 @@ private fun LiveTab(state: Screen.Home, actions: Actions, scope: CoroutineScope)
     }
     val hide = actions.store.hideMature
     val liveFollows = splitFollows(state, follows).first
+    var pulled by remember { mutableStateOf(false) }
+    LaunchedEffect(state.streams.refreshing) { if (!state.streams.refreshing) pulled = false }
+    PullToRefreshBox(
+        isRefreshing = pulled && state.streams.refreshing,
+        onRefresh = {
+            pulled = true
+            refreshStreams(state, scope)
+            refreshFollows(state, follows, actions.store, scope)
+        },
+        modifier = Modifier.fillMaxSize(),
+    ) {
     LazyVerticalGrid(GridCells.Adaptive(CARD_MIN_WIDTH), Modifier.fillMaxSize(), state = state.streamsGrid) {
         if (liveFollows.isNotEmpty()) {
             full("h_follows") { SectionTitle("Live from your follows") }
@@ -291,6 +324,7 @@ private fun LiveTab(state: Screen.Home, actions: Actions, scope: CoroutineScope)
             StreamCard(s, onClick = { actions.openLive(s.slug) }, onChannel = { actions.openChannel(s.slug) })
         }
         full { PagedFooter(state.streams, "Nobody is live with these filters") { loadStreams(state, scope) } }
+    }
     }
 }
 

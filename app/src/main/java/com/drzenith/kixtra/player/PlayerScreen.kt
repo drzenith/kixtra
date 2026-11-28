@@ -91,6 +91,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.graphics.toAndroidRect
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -314,7 +316,10 @@ fun PlayerScreen(actions: Actions) {
     val fadeWithSheet = Modifier.graphicsLayer { alpha = 1f - sheet.fraction }
 
     val video: @Composable (Modifier) -> Unit = { m ->
-        Box(m.background(Color.Black).onGloballyPositioned { sheet.videoCoords = it }) {
+        Box(m.background(Color.Black).onGloballyPositioned {
+            sheet.videoCoords = it
+            if (sheet.fraction == 0f) pc.videoRect.value = it.boundsInWindow().toAndroidRect()
+        }) {
             // Hidden surface for the background preview player. Nearly fully transparent: it still
             // has to be drawn for Android to give it a surface, and frames are copied out of its
             // buffer (unaffected by the view's alpha).
@@ -1015,6 +1020,7 @@ fun MiniPlayer(actions: Actions, modifier: Modifier = Modifier) {
             .graphicsLayer { alpha = 1f - (abs(dragX) / widthPx).coerceIn(0f, 0.8f) }
             .width(MINI_WIDTH)
             .aspectRatio(16f / 9f)
+            .onGloballyPositioned { if (!actions.playerExpanded) pc.videoRect.value = it.boundsInWindow().toAndroidRect() }
             .shadow(10.dp, RoundedCornerShape(10.dp))
             .clip(RoundedCornerShape(10.dp))
             .background(Color.Black)
